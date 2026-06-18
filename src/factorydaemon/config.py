@@ -37,6 +37,7 @@ class Settings(BaseSettings):
 
     mcp_config_path: str | None = Field(default=None, description="Путь к конфигу MCP-серверов")
 
+    telegram_bot_token: str | None = Field(default=None, description="Токен Telegram-бота")
     llm_provider: str = Field(default="ollama-cloud", description="Провайдер LLM")
     llm_model: str = Field(default="qwen2.5-coder:14b", description="Модель LLM")
     llm_base_url: str | None = Field(default=None, description="Базовый URL API LLM")

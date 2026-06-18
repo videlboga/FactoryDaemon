@@ -30,3 +30,11 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+@app.command()
+def telegram() -> None:
+    """Start Telegram bot."""
+    from factorydaemon.bot.telegram import main as bot_main
+
+    bot_main()
