@@ -1,8 +1,8 @@
 """Validators for a shift plan produced by planner/engine.py."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable
 
 from factorydaemon.planner.engine import PlanResult
 from factorydaemon.storage.norms import NormStorage
@@ -34,7 +34,10 @@ def validate_plan_inputs(
     for position, units in demands.items():
         if units <= 0:
             errors.append(
-                ValidationError("INVALID_VOLUME", f"Volume for {position!r} must be > 0, got {units}.")
+                ValidationError(
+                    "INVALID_VOLUME",
+                    f"Volume for {position!r} must be > 0, got {units}.",
+                )
             )
 
     missing = norms.missing(demands.keys())
@@ -91,7 +94,10 @@ def validate_plan_result(
     for position in demands:
         if position not in assigned_positions:
             errors.append(
-                ValidationError("MISSING_IN_PLAN", f"Position {position!r} did not make it into the plan.")
+                ValidationError(
+                    "MISSING_IN_PLAN",
+                    f"Position {position!r} did not make it into the plan.",
+                )
             )
         elif not _approx_equal(assigned_units.get(position, 0.0), demands[position]):
             errors.append(

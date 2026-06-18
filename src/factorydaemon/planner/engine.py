@@ -7,10 +7,10 @@ Algorithm:
 3. First Fit Decreasing (FFD) bin packing with a per-worker POSITION limit.
 4. Back-fill under-loaded workers using priority order while respecting limits.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Iterable
 
 from factorydaemon.storage.norms import NormStorage
 
@@ -31,7 +31,7 @@ class Worker:
 
     @property
     def used_seconds(self) -> float:
-        return sum(l.total_seconds for l in self.loads)
+        return sum(load.total_seconds for load in self.loads)
 
     @property
     def remaining_seconds(self) -> float:
@@ -42,10 +42,7 @@ class Worker:
         return len(self.loads)
 
     def can_fit(self, load: PositionLoad, max_positions: int) -> bool:
-        return (
-            self.positions_count < max_positions
-            and self.remaining_seconds >= load.total_seconds
-        )
+        return self.positions_count < max_positions and self.remaining_seconds >= load.total_seconds
 
     def add(self, load: PositionLoad) -> None:
         self.loads.append(load)
@@ -98,7 +95,7 @@ def _build_loads(
         )
 
     # Sort: higher priority first, then larger labour first (FFD).
-    loads.sort(key=lambda l: (-priorities.get(l.position, 0), -l.total_seconds))
+    loads.sort(key=lambda load: (-priorities.get(load.position, 0), -load.total_seconds))
     return loads
 
 
@@ -128,7 +125,7 @@ def plan(
 
     shift_seconds = shift_hours * 3600.0
     loads = _build_loads(demands, priorities, norms)
-    total_seconds = sum(l.total_seconds for l in loads)
+    total_seconds = sum(load.total_seconds for load in loads)
 
     if total_seconds == 0:
         return PlanResult(
@@ -138,9 +135,9 @@ def plan(
             total_seconds=0.0,
         )
 
-    min_workers = max(1, int(total_seconds // shift_seconds) + (
-        1 if total_seconds % shift_seconds else 0
-    ))
+    min_workers = max(
+        1, int(total_seconds // shift_seconds) + (1 if total_seconds % shift_seconds else 0)
+    )
 
     # Phase 1: First Fit Decreasing placement into open bins.
     workers: list[Worker] = []
@@ -165,7 +162,7 @@ def plan(
 
     # Re-sort worker loads by priority for stable output.
     for w in workers:
-        w.loads.sort(key=lambda l: -priorities.get(l.position, 0))
+        w.loads.sort(key=lambda load: -priorities.get(load.position, 0))
 
     return PlanResult(
         workers=workers,
@@ -188,7 +185,7 @@ def _repack(
     new_workers: list[Worker] = []
     unassigned: list[PositionLoad] = []
 
-    for load in [l for w in workers for l in w.loads]:
+    for load in [w_load for w in workers for w_load in w.loads]:
         placed = False
         for worker in new_workers:
             if worker.can_fit(load, max_positions):

@@ -4,10 +4,11 @@ Full SQLite implementation is VID-284. This module exposes the minimal
 interface required by planner/engine.py so that VID-285 can be developed
 and tested independently.
 """
+
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable
 
 
 @dataclass(frozen=True)

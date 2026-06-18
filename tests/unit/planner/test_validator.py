@@ -1,4 +1,5 @@
 """Tests for planner/validator.py (TDD)."""
+
 from __future__ import annotations
 
 import pytest
@@ -9,11 +10,13 @@ from factorydaemon.storage.norms import NormStorage
 
 
 def _norms() -> NormStorage:
-    return NormStorage({
-        "cut": 120.0,
-        "sew": 180.0,
-        "pack": 60.0,
-    })
+    return NormStorage(
+        {
+            "cut": 120.0,
+            "sew": 180.0,
+            "pack": 60.0,
+        }
+    )
 
 
 def test_validate_inputs_missing_norms():

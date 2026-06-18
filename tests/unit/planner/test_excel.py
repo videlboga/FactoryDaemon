@@ -1,4 +1,5 @@
 """Tests for planner/excel.py (TDD)."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -12,11 +13,13 @@ from factorydaemon.storage.norms import NormStorage
 
 
 def _norms() -> NormStorage:
-    return NormStorage({
-        "cut": 120.0,
-        "sew": 180.0,
-        "pack": 60.0,
-    })
+    return NormStorage(
+        {
+            "cut": 120.0,
+            "sew": 180.0,
+            "pack": 60.0,
+        }
+    )
 
 
 def test_write_excel_report_creates_file(tmp_path: Path):

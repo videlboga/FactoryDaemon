@@ -1,14 +1,16 @@
 """Excel report generator for a shift plan."""
+
 from __future__ import annotations
 
 import os
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
 
 from openpyxl import Workbook
 from openpyxl.styles import Font
 from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.worksheet import Worksheet
 
 from factorydaemon.planner.engine import PlanResult
 
@@ -18,13 +20,13 @@ class ExcelReport:
     path: Path
 
 
-def _set_header(ws, row: int, columns: list[str]) -> None:
+def _set_header(ws: Worksheet, row: int, columns: list[str]) -> None:
     for col_idx, value in enumerate(columns, start=1):
         cell = ws.cell(row=row, column=col_idx, value=value)
         cell.font = Font(bold=True)
 
 
-def _autosize_columns(ws) -> None:
+def _autosize_columns(ws: Worksheet) -> None:
     for col in ws.columns:
         max_length = 0
         col_letter = get_column_letter(col[0].column)
@@ -40,7 +42,7 @@ def _autosize_columns(ws) -> None:
 
 def write_excel_report(
     plan_result: PlanResult,
-    output_path: str | os.PathLike,
+    output_path: str | os.PathLike[str],
     warnings: Iterable[str] | None = None,
 ) -> ExcelReport:
     """Write an Excel file with three sheets: План, Сводка, Предупреждения."""
@@ -53,7 +55,18 @@ def write_excel_report(
     warnings_ws = wb.create_sheet("Предупреждения")
 
     # Sheet: План
-    _set_header(plan_ws, 1, ["Работник", "Позиция", "Единиц", "Норма (с/ед)", "Время (с)", "Загрузка (%)"])
+    _set_header(
+        plan_ws,
+        1,
+        [
+            "Работник",
+            "Позиция",
+            "Единиц",
+            "Норма (с/ед)",
+            "Время (с)",
+            "Загрузка (%)",
+        ],
+    )
     row = 2
     for worker in plan_result.workers:
         for load in worker.loads:

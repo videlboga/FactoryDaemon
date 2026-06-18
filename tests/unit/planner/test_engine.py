@@ -1,7 +1,6 @@
 """Tests for planner/engine.py (TDD)."""
-from __future__ import annotations
 
-import math
+from __future__ import annotations
 
 import pytest
 
@@ -10,12 +9,14 @@ from factorydaemon.storage.norms import NormStorage
 
 
 def _norms() -> NormStorage:
-    return NormStorage({
-        "cut": 120.0,      # 2 min per unit
-        "sew": 180.0,      # 3 min per unit
-        "pack": 60.0,      # 1 min per unit
-        "inspect": 30.0,   # 30 sec per unit
-    })
+    return NormStorage(
+        {
+            "cut": 120.0,  # 2 min per unit
+            "sew": 180.0,  # 3 min per unit
+            "pack": 60.0,  # 1 min per unit
+            "inspect": 30.0,  # 30 sec per unit
+        }
+    )
 
 
 def test_plan_raises_on_missing_norms():
@@ -55,9 +56,7 @@ def test_plan_single_worker_fits_all():
     )
     assert result.worker_count == 1
     assert len(result.workers[0].loads) == 3
-    assert result.utilization == pytest.approx(
-        result.total_seconds / (8 * 3600), rel=1e-9
-    )
+    assert result.utilization == pytest.approx(result.total_seconds / (8 * 3600), rel=1e-9)
 
 
 def test_plan_respects_position_limit():
@@ -99,7 +98,7 @@ def test_plan_priority_order_placed_first():
         shift_hours=8,
         max_positions_per_worker=10,
     )
-    positions = [l.position for l in result.workers[0].loads]
+    positions = [load.position for load in result.workers[0].loads]
     # Highest priority should be first in the first worker's list.
     assert positions[0] == "a"
 
