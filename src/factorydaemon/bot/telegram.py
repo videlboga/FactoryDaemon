@@ -111,16 +111,30 @@ async def _handle_file_upload(
         else "upload.xlsx"
     )
     suffix = ".txt" if text_source else Path(file_name).suffix
+
+    # Persist raw uploads for debugging / replay.
+    upload_dir = Path(tempfile.gettempdir()) / "factorydaemon-uploads" / str(chat_id)
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    counter = len(list(upload_dir.glob("*"))) + 1
+    raw_path = upload_dir / f"{counter:03d}_{file_name}"
+    raw_path.write_bytes(file_bytes)
+    logger.info("saved raw upload chat_id=%s path=%s size=%s", chat_id, raw_path, len(file_bytes))
+
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         tmp.write(file_bytes)
         tmp_path = Path(tmp.name)
 
     try:
         result = ingest_file(session, tmp_path)
+    except Exception as exc:
+        logger.exception("Failed to ingest file for chat_id=%s", chat_id)
+        await message.answer(f"Не удалось обработать файл: {exc}")
+        return
     finally:
         os.unlink(tmp_path)
 
     _save_session(result.session, chat_id)
+    logger.info("ingest result chat_id=%s step=%s reply=%r", chat_id, result.session.step, result.reply[:120])
 
     if result.excel_path:
         document = types.FSInputFile(result.excel_path)
@@ -214,16 +228,28 @@ async def cmd_plan(message: types.Message, state: FSMContext) -> None:
 
 @dp.message(F.document)
 async def handle_document(message: types.Message, state: FSMContext) -> None:
+    logger = logging.getLogger(__name__)
     document = message.document
     if document is None or document.file_id is None:
+        logger.warning("Received document message without file_id chat_id=%s", message.chat.id)
         return
+    logger.info(
+        "handle_document chat_id=%s file_id=%s name=%s mime=%s size=%s",
+        message.chat.id,
+        document.file_id,
+        document.file_name,
+        document.mime_type,
+        document.file_size,
+    )
     bot = get_bot()
     try:
         file_obj = await bot.get_file(document.file_id)
         if file_obj.file_path is None:
+            logger.warning("No file_path for file_id=%s", document.file_id)
             return
         file_stream = await bot.download_file(file_obj.file_path)
         if file_stream is None:
+            logger.warning("Empty download for file_id=%s", document.file_id)
             return
         await _handle_file_upload(message, state, file_stream.read())
     finally:

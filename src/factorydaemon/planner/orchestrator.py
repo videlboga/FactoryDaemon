@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 import pandas as pd
 
 from factorydaemon.planner.engine import plan as plan_shift
-from factorydaemon.planner.file_type import detect_file_type
+from factorydaemon.planner.file_type import FileTypeResult, detect_file_type
 from factorydaemon.planner.parser import ParseError, parse_file
 from factorydaemon.planner.session import Step, UserSession
 from factorydaemon.planner.validator import ValidationError, check_plan, validate_plan_inputs
@@ -105,6 +105,19 @@ def _find_column(df: pd.DataFrame, keys: set[str]) -> str | None:
         normalized = "".join(ch for ch in normalized if ch.isalnum() or ch == "_")
         if normalized in keys or any(normalized.startswith(k + "_") for k in keys):
             return str(col)
+    return None
+
+
+
+
+def _guess_fallback_type(session: UserSession) -> str | None:
+    """Return the most likely missing file type based on session state."""
+    if not session.demands:
+        return "остатки"
+    if not session.norms:
+        return "нормы"
+    if not session.priorities:
+        return "приоритеты"
     return None
 
 
