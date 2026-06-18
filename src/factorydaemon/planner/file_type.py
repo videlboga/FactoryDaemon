@@ -130,6 +130,25 @@ def _header_matches(header: str, key_set: frozenset[str]) -> bool:
     return normalized in key_set or any(normalized.startswith(k + "_") for k in key_set)
 
 
+def _detect_priority_by_values(df: pd.DataFrame) -> bool:
+    """Heuristic: a numeric column with small integers (1-10) looks like priority ranks."""
+    for col in df.columns:
+        try:
+            values = pd.to_numeric(df[col], errors="coerce").dropna()
+        except Exception:
+            continue
+        if len(values) == 0:
+            continue
+        if values.dtype.kind not in "iufb":
+            continue
+        unique = values.unique()
+        if len(unique) > 20 or len(unique) < 2:
+            continue
+        if values.min() >= 1 and values.max() <= 10:
+            return True
+    return False
+
+
 def detect_file_type(df: pd.DataFrame) -> FileTypeResult:
     """Classify a DataFrame as one of the known FactoryDaemon file types.
 
@@ -224,6 +243,14 @@ def detect_file_type(df: pd.DataFrame) -> FileTypeResult:
     has_position_like = any(_header_matches(h, _POSITION_KEYS) for h in headers)
     single_value_ok = has_position_like and best_score == 1 and second_score == 0
     if not single_value_ok and (best_score < 2 or second_score >= best_score):
+        # If we have at least a position column and a numeric column with small
+        # integer values, treat it as priorities regardless of header noise.
+        if has_position_like and _detect_priority_by_values(df):
+            return FileTypeResult(
+                file_type="приоритеты",
+                confidence=0.7,
+                reason=f"Position column + small integer values look like priority ranks. {evidence}.",
+            )
         confidence = best_score / (total_evidence + 1)
         reason = f"Ambiguous header signals: {evidence}. Matched columns: {matched_by_header}."
         return FileTypeResult(file_type=None, confidence=round(confidence, 3), reason=reason)
@@ -244,6 +271,22 @@ def detect_file_type(df: pd.DataFrame) -> FileTypeResult:
         columns_text += f", {secondary_header}"
 
     reason = f"Detected '{best_type}' from columns: {columns_text}."
+
+    # Post-process: if classified as demand but the value column contains
+    # only small integers (1-10), it is more likely a priority file.
+    if best_type == "остатки" and has_position_like:
+        for col in df.columns:
+            if not _header_matches(col, _QUANTITY_KEYS):
+                continue
+            try:
+                values = pd.to_numeric(df[col], errors="coerce").dropna()
+            except Exception:
+                continue
+            if len(values) > 0 and values.min() >= 1 and values.max() <= 10 and (values % 1 == 0).all():
+                best_type = "приоритеты"
+                confidence = max(0.7, confidence - 0.1)
+                reason = f"Small integer values look like priorities; {reason}"
+                break
 
     return FileTypeResult(
         file_type=best_type,

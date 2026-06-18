@@ -166,6 +166,28 @@ def ingest_file(session: UserSession, source: str | Path) -> PlanningResult:
         classification.reason,
         list(df.columns),
     )
+
+    # If classifier says demand but we already have demands and values are small integers, treat as priorities.
+    if classification.file_type == "остатки" and session.demands:
+        qty_col = _find_column(df, _QUANTITY_KEYS)
+        if qty_col:
+            try:
+                values = pd.to_numeric(df[qty_col], errors="coerce").dropna()
+                if (
+                    len(values) > 0
+                    and values.min() >= 1
+                    and values.max() <= 10
+                    and (values % 1 == 0).all()
+                ):
+                    classification = FileTypeResult(
+                        file_type="приоритеты",
+                        confidence=0.7,
+                        reason=f"Small integer values look like priorities; {classification.reason}",
+                    )
+                    logger.info("Reclassified demand file as priorities due to small integer values")
+                    df = df.rename(columns={qty_col: "Приоритет"})
+            except Exception:
+                pass
     if classification.file_type is None:
         return PlanningResult(
             session,
