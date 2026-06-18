@@ -78,7 +78,7 @@ Issues = "https://github.com/videlboga/FactoryDaemon/issues"
 path = "src/factorydaemon/__init__.py"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/factorydaemon"]
+packages = ["factorydaemon"]
 
 [tool.hatch.build.targets.sdist]
 include = [
