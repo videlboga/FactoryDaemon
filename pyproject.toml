@@ -1,0 +1,117 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "factorydaemon"
+dynamic = ["version"]
+description = "Агентная система для управления производством"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.11"
+authors = [
+    {name = "CyberKitty Engineer", email = "engineer@videlboga.com"},
+]
+keywords = ["agent", "factory", "manufacturing", "scheduler", "mcp"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+    "httpx>=0.27",
+    "typer>=0.12",
+    "rich>=13.0",
+    "structlog>=24.0",
+    "orjson>=3.10",
+    "python-dotenv>=1.0",
+    "sqlalchemy>=2.0",
+    "alembic>=1.13",
+    "asyncpg>=0.29",
+    "aiosqlite>=0.20",
+    "fastapi>=0.111",
+    "uvicorn[standard]>=0.30",
+    "mcp>=1.6.0",
+    "prometheus-client>=0.20",
+    "aiohttp>=3.9",
+    "tenacity>=8.4",
+    "croniter>=2.0",
+    "tzdata>=2024.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=5.0",
+    "httpx>=0.27",
+    "respx>=0.21",
+    "freezegun>=1.5",
+    "ruff>=0.4",
+    "mypy>=1.10",
+    "pre-commit>=3.7",
+]
+
+[project.scripts]
+factorydaemon = "factorydaemon.cli:main"
+fd = "factorydaemon.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/videlboga/FactoryDaemon"
+Repository = "https://github.com/videlboga/FactoryDaemon"
+Issues = "https://github.com/videlboga/FactoryDaemon/issues"
+
+[tool.hatch.version]
+path = "src/factorydaemon/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/factorydaemon"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src",
+    "/tests",
+    "/README.md",
+    "/LICENSE",
+    "/.env.example",
+    "/pyproject.toml",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+pythonpath = ["src"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP", "B", "C4", "SIM"]
+ignore = []
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+warn_unused_ignores = true
+ignore_missing_imports = true
+
+[tool.coverage.run]
+source = ["src/factorydaemon"]
+omit = ["*/tests/*", "*/__pycache__/*"]
+
+[tool.coverage.report]
+skip_covered = false
+show_missing = true
