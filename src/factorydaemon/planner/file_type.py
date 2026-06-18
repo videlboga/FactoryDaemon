@@ -52,6 +52,18 @@ _POSITION_KEYS = frozenset(
         "product",
         "изделие",
         "наименование",
+        "nomer",
+        "nomer_p_p",
+        "nomer_pp",
+        "pp",
+        "id",
+        "код",
+        "№",
+        "№_пп",
+        "№пп",
+        "номер",
+        "id",
+        "код",
     }
 )
 _QUANTITY_KEYS = frozenset(
@@ -81,6 +93,9 @@ _TIME_KEYS = frozenset(
         "трудоемкость",
         "трудоёмкость",
         "rate",
+        "время_обработки",
+        "время_обработки_сек",
+        "сек",
     }
 )
 _PRIORITY_KEYS = frozenset(
@@ -103,6 +118,8 @@ def _normalize_header(value: object) -> str:
     # Replace common separators with underscores, then collapse.
     text = text.replace("/", "_").replace("\\", "_").replace("-", "_")
     text = text.replace(" ", "_").replace(".", "_")
+    # Treat the № symbol as an id marker.
+    text = text.replace("№", "nomer")
     # Remove non-alphanumeric/underscore characters to keep comparability.
     return "".join(ch for ch in text if ch.isalnum() or ch == "_")
 
@@ -202,8 +219,11 @@ def detect_file_type(df: pd.DataFrame) -> FileTypeResult:
     best_type, best_score = ranked[0]
     second_score = ranked[1][1] if len(ranked) > 1 else 0
 
-    # Require at least two evidence tokens and a strict leader.
-    if best_score < 2 or second_score >= best_score:
+    # Require at least two evidence tokens and a strict leader, OR a single
+    # strong value signal when there is a position-ish column to pair with.
+    has_position_like = any(_header_matches(h, _POSITION_KEYS) for h in headers)
+    single_value_ok = has_position_like and best_score == 1 and second_score == 0
+    if not single_value_ok and (best_score < 2 or second_score >= best_score):
         confidence = best_score / (total_evidence + 1)
         reason = f"Ambiguous header signals: {evidence}. Matched columns: {matched_by_header}."
         return FileTypeResult(file_type=None, confidence=round(confidence, 3), reason=reason)

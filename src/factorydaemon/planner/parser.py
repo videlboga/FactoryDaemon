@@ -115,10 +115,31 @@ def _parse_csv(path: Path) -> pd.DataFrame:
     if not text.strip():
         raise ParseError("CSV file is empty")
     delimiter = _sniff_csv_delimiter(text)
+    df = _try_read_csv(text, delimiter)
+    if df is None:
+        # The sniffer may have been confused by commas inside the header.
+        for delim in [",", ";", "	", "|", ":", " "]:
+            if delim == delimiter:
+                continue
+            df = _try_read_csv(text, delim)
+            if df is not None and len(df.columns) > 1:
+                break
+    if df is None:
+        raise ParseError(f"Failed to read csv file {path}")
+    return df
+
+
+def _try_read_csv(text: str, delimiter: str):
+    """Attempt to parse CSV; return None if result looks malformed."""
+    import pandas as pd
+
     try:
-        return pd.read_csv(io.StringIO(text), delimiter=delimiter, dtype=str, keep_default_na=False)
-    except Exception as exc:  # noqa: BLE001
-        raise ParseError(f"Failed to read csv file {path}: {exc}") from exc
+        df = pd.read_csv(io.StringIO(text), delimiter=delimiter, dtype=str, keep_default_na=False)
+    except Exception:
+        return None
+    if df.empty or len(df.columns) <= 1:
+        return None
+    return df
 
 
 def _looks_like_markdown_table(lines: list[str]) -> bool:

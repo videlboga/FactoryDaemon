@@ -9,6 +9,7 @@ Handles:
 
 from __future__ import annotations
 
+import logging
 import os
 import tempfile
 from pathlib import Path
@@ -32,6 +33,17 @@ class PlanStates(StatesGroup):
     reporting = State()
 
 
+def _setup_logging() -> None:
+    """Configure structured logging for the bot."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        handlers=[logging.StreamHandler()],
+    )
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("aiogram").setLevel(logging.WARNING)
+
+
 def _session_path(chat_id: int) -> Path:
     """Path to on-disk session JSON."""
     tmpdir = Path(tempfile.gettempdir()) / "factorydaemon-sessions"
@@ -49,7 +61,7 @@ def _load_session(chat_id: int) -> UserSession:
             with open(path, encoding="utf-8") as f:
                 return UserSession.from_dict(json.load(f))
         except Exception:
-            pass
+            logging.getLogger(__name__).exception("Failed to load session %s", chat_id)
     return UserSession(session_id=f"tg-{chat_id}")
 
 
@@ -64,6 +76,7 @@ def _save_session(session: UserSession, chat_id: int) -> None:
 
 async def _reply_or_explain(result: PlanningResult, message: types.Message) -> None:
     """Send text reply; use LLM to rephrase if there are validation errors."""
+    logger = logging.getLogger(__name__)
     if result.errors:
         try:
             msgs = [{"role": "user", "content": result.reply}]
@@ -71,7 +84,7 @@ async def _reply_or_explain(result: PlanningResult, message: types.Message) -> N
             await message.answer(explanation, parse_mode=ParseMode.MARKDOWN)
             return
         except LLMError:
-            pass
+            logger.warning("LLM explanation failed", exc_info=True)
     await message.answer(result.reply, parse_mode=ParseMode.MARKDOWN)
 
 
@@ -82,7 +95,14 @@ async def _handle_file_upload(
     text_source: bool = False,
 ) -> None:
     """Process any incoming file or pasted table."""
+    logger = logging.getLogger(__name__)
     chat_id = message.chat.id
+    logger.info(
+        "handle_file_upload chat_id=%s size=%s text_source=%s",
+        chat_id,
+        len(file_bytes),
+        text_source,
+    )
     session = _load_session(chat_id)
 
     file_name = (
@@ -111,8 +131,6 @@ async def _handle_file_upload(
     if result.session.step == Step.FINISHED:
         await state.set_state(PlanStates.collecting)
     elif result.session.step == Step.PLAN_READY:
-        await state.set_state(PlanStates.reporting)
-    elif result.session.step == Step.READY_TO_PLAN:
         output = Path(tempfile.gettempdir()) / f"plan_{chat_id}.xlsx"
         result2 = finish_plan(result.session, output)
         _save_session(result2.session, chat_id)
@@ -137,8 +155,19 @@ def get_bot() -> Bot:
 dp = Dispatcher(storage=MemoryStorage())
 
 
+@dp.errors()
+async def handle_errors(event: types.ErrorEvent) -> None:
+    logger = logging.getLogger(__name__)
+    logger.exception("Unhandled aiogram error: %s", event.exception)
+    if event.update.message:
+        await event.update.message.answer(
+            "Произошла ошибка. Попробуйте /reset и пришлите файлы заново."
+        )
+
+
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext) -> None:
+    logging.getLogger(__name__).info("cmd_start from chat_id=%s", message.chat.id)
     await state.set_state(PlanStates.collecting)
     text = """Привет! Я планировщик производственных смен FactoryDaemon.
 
@@ -189,13 +218,16 @@ async def handle_document(message: types.Message, state: FSMContext) -> None:
     if document is None or document.file_id is None:
         return
     bot = get_bot()
-    file_obj = await bot.get_file(document.file_id)
-    if file_obj.file_path is None:
-        return
-    file_stream = await bot.download_file(file_obj.file_path)
-    if file_stream is None:
-        return
-    await _handle_file_upload(message, state, file_stream.read())
+    try:
+        file_obj = await bot.get_file(document.file_id)
+        if file_obj.file_path is None:
+            return
+        file_stream = await bot.download_file(file_obj.file_path)
+        if file_stream is None:
+            return
+        await _handle_file_upload(message, state, file_stream.read())
+    finally:
+        await bot.session.close()
 
 
 @dp.message(F.text)
@@ -220,6 +252,9 @@ def main() -> None:
     """Entrypoint for the Telegram bot."""
     import asyncio
 
+    _setup_logging()
+    logger = logging.getLogger(__name__)
+    logger.info("Starting FactoryDaemon Telegram bot")
     bot = get_bot()
     asyncio.run(dp.start_polling(bot))
 

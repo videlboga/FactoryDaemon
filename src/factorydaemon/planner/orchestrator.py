@@ -9,6 +9,7 @@ This module implements the conversation flow:
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -50,6 +51,13 @@ _POSITION_KEYS = {
     "part",
     "product",
     "изделие",
+    "nomer",
+    "nomer_p_p",
+    "nomer_pp",
+    "pp",
+    "номер",
+    "id",
+    "код",
     "наименование",
 }
 _QUANTITY_KEYS = {
@@ -91,6 +99,7 @@ def _find_column(df: pd.DataFrame, keys: set[str]) -> str | None:
     """Find a DataFrame column matching one of the key fingerprints."""
     for col in df.columns:
         normalized = str(col).strip().lower()
+        normalized = normalized.replace("№", "nomer")
         normalized = normalized.replace("/", "_").replace("\\", "_").replace("-", "_")
         normalized = normalized.replace(" ", "_").replace(".", "_")
         normalized = "".join(ch for ch in normalized if ch.isalnum() or ch == "_")
@@ -103,7 +112,13 @@ def _extract_columns(df: pd.DataFrame, file_type: str) -> tuple[str, str] | None
     """Return (position_col, value_col) for known file types."""
     pos_col = _find_column(df, _POSITION_KEYS)
     if not pos_col:
-        return None
+        # Fallback: use the first column as a position key if it looks like an id/number.
+        first_col = str(df.columns[0])
+        normalized = ''.join(ch for ch in first_col.lower() if ch.isalnum() or ch == ' ')
+        if any(k in normalized for k in {'№', 'номер', 'пп', 'id', 'код'}):
+            pos_col = first_col
+        else:
+            return None
     if file_type == "остатки":
         val_col = _find_column(df, _QUANTITY_KEYS)
     elif file_type == "нормы":
@@ -125,12 +140,19 @@ def _reply(reply: str, extra: str) -> str:
 
 def ingest_file(session: UserSession, source: str | Path) -> PlanningResult:
     """Parse a file, classify it, and merge its data into the session."""
+    logger = logging.getLogger(__name__)
     try:
         df = parse_file(source)
     except ParseError as exc:
         return PlanningResult(session, f"Не удалось прочитать файл: {exc}")
 
     classification = detect_file_type(df)
+    logger.info(
+        "File classified as %s (reason: %s), columns: %s",
+        classification.file_type,
+        classification.reason,
+        list(df.columns),
+    )
     if classification.file_type is None:
         return PlanningResult(
             session,
@@ -140,6 +162,7 @@ def ingest_file(session: UserSession, source: str | Path) -> PlanningResult:
         )
 
     cols = _extract_columns(df, classification.file_type)
+    logger.info("Matched columns for %s: %s", classification.file_type, cols)
     if cols is None:
         return PlanningResult(
             session,
