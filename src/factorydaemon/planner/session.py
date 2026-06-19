@@ -16,9 +16,9 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, cast
 
-if TYPE_CHECKING:
-    import pandas as pd
+import pandas as pd
 
+if TYPE_CHECKING:
     from factorydaemon.planner.engine import PlanResult
 
 
@@ -88,20 +88,26 @@ class UserSession:
             if pos and sec is not None and sec > 0:
                 self.norms[pos] = sec
 
-    def update_priorities(self, df: pd.DataFrame, position_col: str, priority_col: str | None) -> None:
+    def update_priorities(
+        self,
+        df: pd.DataFrame,
+        position_col: str,
+        priority_col: str | None,
+        *,
+        use_row_order: bool = False,
+    ) -> None:
         """Store priorities table and extract priorities.
 
-        If priority_col is None or its values are empty, the row order itself
-        defines priority (top row = highest priority).
+        If use_row_order is True (or priority_col is None and use_row_order is True),
+        the row order itself defines priority (top row = highest priority).
+        Otherwise explicit numeric priority values are used.
         """
         self.priorities_df = df
-        use_order = priority_col is None
+        use_order = use_row_order or priority_col is None
         if not use_order and priority_col in df.columns:
             values = pd.to_numeric(df[priority_col], errors="coerce").dropna()
             if len(values) == 0:
                 use_order = True
-        else:
-            use_order = True
 
         n_rows = len(df)
         for idx, (_, row) in enumerate(df.iterrows()):
