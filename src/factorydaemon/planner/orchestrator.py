@@ -320,6 +320,17 @@ def run_planner(session: UserSession, initial_reply: str = "") -> PlanningResult
         session.demands, session.priorities, norms, plan_result, session.shift_hours
     )
     if errors:
+        missing = [e for e in errors if e.code == "MISSING_IN_PLAN"]
+        if missing and session.target_workers is not None:
+            positions = ", ".join(e.message.split()[1].strip("'\"") for e in missing[:10])
+            more = " и др." if len(missing) > 10 else ""
+            session.step = Step.ASKING_WORKERS
+            extra = (
+                f"Для {session.target_workers} работников не хватает смены. "
+                f"Позиции не вошли: {positions}{more}.\n"
+                "Ответьте большее число работников."
+            )
+            return PlanningResult(session, _reply(initial_reply, extra))
         session.step = Step.COLLECTING
         msgs = "\n".join(f"- {e.message}" for e in errors[:5])
         extra = "План не прошёл проверку:\n" + msgs
