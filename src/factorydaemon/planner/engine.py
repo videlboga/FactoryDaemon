@@ -55,6 +55,8 @@ class PlanResult:
     max_positions_per_worker: int
     total_seconds: float
     unassigned: list[PositionLoad] = field(default_factory=list)
+    target_worker_count: int | None = None
+    extra_workers_needed: int = 0
 
     @property
     def worker_count(self) -> int:
@@ -115,7 +117,7 @@ def plan(
         norms: NormStorage with seconds per unit for every demanded position.
         shift_hours: length of one shift in hours.
         max_positions_per_worker: hard limit of distinct positions per worker.
-        target_worker_count: if set, plan for exactly this many workers.
+        target_worker_count: desired number of workers; will be increased if insufficient.
 
     Returns:
         PlanResult with assigned workers and any unassigned loads.
@@ -135,51 +137,32 @@ def plan(
             shift_seconds=shift_seconds,
             max_positions_per_worker=max_positions_per_worker,
             total_seconds=0.0,
+            target_worker_count=target_worker_count,
         )
 
+    # Determine how many workers are actually required.
+    min_by_time = max(1, int(total_seconds // shift_seconds) + (1 if total_seconds % shift_seconds else 0))
+    min_by_positions = max(1, (len(loads) + max_positions_per_worker - 1) // max_positions_per_worker)
+    min_workers = max(min_by_time, min_by_positions)
+
     if target_worker_count is not None and target_worker_count > 0:
-        min_workers = target_worker_count
+        effective_workers = max(target_worker_count, min_workers)
+        extra_needed = effective_workers - target_worker_count
     else:
-        min_workers = max(
-            1, int(total_seconds // shift_seconds) + (1 if total_seconds % shift_seconds else 0)
+        effective_workers = min_workers
+        extra_needed = 0
+
+    workers, unassigned = _distribute_fixed_workers(
+        loads, effective_workers, shift_seconds, max_positions_per_worker
+    )
+
+    # If unassigned remain (rare edge case), try to add more workers until everything fits.
+    while unassigned and effective_workers < 100:
+        effective_workers += 1
+        workers, unassigned = _distribute_fixed_workers(
+            loads, effective_workers, shift_seconds, max_positions_per_worker
         )
-
-    if target_worker_count is not None and target_worker_count > 0:
-        # Distribute loads evenly across a fixed number of workers (best-fit by remaining capacity).
-        workers: list[Worker] = [
-            Worker(index=i, capacity_seconds=shift_seconds) for i in range(target_worker_count)
-        ]
-        unassigned: list[PositionLoad] = []
-        for load in loads:
-            candidates = [w for w in workers if w.can_fit(load, max_positions_per_worker)]
-            if not candidates:
-                unassigned.append(load)
-                continue
-            best = max(candidates, key=lambda w: w.remaining_seconds)
-            best.add(load)
-    else:
-        # Phase 1: First Fit Decreasing placement into open bins.
-        workers: list[Worker] = []
-        for load in loads:
-            placed = False
-            for worker in workers:
-                if worker.can_fit(load, max_positions_per_worker):
-                    worker.add(load)
-                    placed = True
-                    break
-            if not placed:
-                worker = Worker(index=len(workers), capacity_seconds=shift_seconds)
-                worker.add(load)
-                workers.append(worker)
-
-        # Phase 2: compact to the minimal number of workers if FFD over-opened bins.
-        if len(workers) > min_workers:
-            workers = _repack(workers, min_workers, max_positions_per_worker, shift_seconds)
-
-        # Phase 3: back-fill under-loaded workers using remaining slack.
-        _backfill(workers, max_positions_per_worker)
-
-        unassigned: list[PositionLoad] = []
+        extra_needed += 1
 
     # Re-sort worker loads by priority for stable output.
     for w in workers:
@@ -190,7 +173,30 @@ def plan(
         shift_seconds=shift_seconds,
         max_positions_per_worker=max_positions_per_worker,
         total_seconds=total_seconds,
+        unassigned=unassigned,
+        target_worker_count=target_worker_count,
+        extra_workers_needed=extra_needed,
     )
+
+
+def _distribute_fixed_workers(
+    loads: list[PositionLoad],
+    worker_count: int,
+    shift_seconds: float,
+    max_positions_per_worker: int,
+) -> tuple[list[Worker], list[PositionLoad]]:
+    """Distribute loads across a fixed number of workers using best-fit by remaining capacity."""
+    workers = [Worker(index=i, capacity_seconds=shift_seconds) for i in range(worker_count)]
+    unassigned: list[PositionLoad] = []
+    for load in loads:
+        candidates = [w for w in workers if w.can_fit(load, max_positions_per_worker)]
+        if not candidates:
+            unassigned.append(load)
+            continue
+        best = max(candidates, key=lambda w: w.remaining_seconds)
+        best.add(load)
+    return workers, unassigned
+
 
 
 def _repack(

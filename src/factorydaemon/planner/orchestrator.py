@@ -302,19 +302,31 @@ def run_planner(session: UserSession, initial_reply: str = "") -> PlanningResult
     session.warnings = []
 
     utilization = plan_result.utilization
+    extra_parts: list[str] = []
+    if plan_result.extra_workers_needed > 0:
+        target = plan_result.target_worker_count or session.target_workers
+        extra_parts.append(
+            f"Для ваших объёмов нужно на {plan_result.extra_workers_needed} работник(ов) больше, "
+            f"чем {target}. План посчитан на {plan_result.worker_count}."
+        )
+
     if (
         utilization < session.underload_threshold
         and not session.asked_for_more_priorities_underload
     ):
         session.asked_for_more_priorities_underload = True
         session.step = Step.UNDERLOAD
-        extra = (
-            f"Посчитал план: {plan_result.worker_count} работник(ов), "
-            f"средняя загрузка {utilization * 100:.1f}%. Это ниже порога "
-            f"{session.underload_threshold * 100:.0f}%. "
-            "Пришлите ещё приоритеты/позиции, чтобы загрузить смену полнее."
+        load_msg = (
+            f"Средняя загрузка {utilization * 100:.1f}% — ниже порога "
+            f"{session.underload_threshold * 100:.0f}%."
         )
-        return PlanningResult(session, _reply(initial_reply, extra))
+        extra_parts.extend(
+            [
+                load_msg,
+                "Пришлите ещё приоритеты/позиции, чтобы загрузить смену полнее.",
+            ]
+        )
+        return PlanningResult(session, _reply(initial_reply, " ".join(extra_parts)))
 
     errors = check_plan(
         session.demands, session.priorities, norms, plan_result, session.shift_hours
@@ -337,10 +349,11 @@ def run_planner(session: UserSession, initial_reply: str = "") -> PlanningResult
         return PlanningResult(session, _reply(initial_reply, extra))
 
     session.step = Step.PLAN_READY
-    extra = (
+    extra_parts.append(
         f"План готов: {plan_result.worker_count} работник(ов), "
         f"средняя загрузка {utilization * 100:.1f}%. Сейчас сгенерирую Excel-отчёт."
     )
+    extra = " ".join(extra_parts)
     return PlanningResult(session, _reply(initial_reply, extra))
 
 
