@@ -110,6 +110,15 @@ def _find_column(df: pd.DataFrame, keys: set[str]) -> str | None:
 
 
 
+def _expected_file_type(session: UserSession) -> str:
+    """Return the next file type the session is waiting for (sequential mode)."""
+    if not session.demands:
+        return "остатки"
+    if not session.norms:
+        return "нормы"
+    return "приоритеты"
+
+
 def _guess_fallback_type(session: UserSession) -> str | None:
     """Return the most likely missing file type based on session state."""
     if not session.demands:
