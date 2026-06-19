@@ -251,6 +251,17 @@ def advance_session(session: UserSession, initial_reply: str = "") -> PlanningRe
     for pos in session.missing_priorities_positions:
         session.priorities[pos] = 0
 
+    # Positions without norms cannot be planned; silently exclude them.
+    missing_norms = session.missing_norms_positions
+    if missing_norms:
+        for pos in list(session.demands.keys()):
+            if pos not in session.norms:
+                session.demands.pop(pos, None)
+                session.priorities.pop(pos, None)
+        info = f"Внимание: {len(missing_norms)} позиций без норм исключены из плана.\n"
+    else:
+        info = ""
+
     if not session.is_ready_to_plan:
         return PlanningResult(
             session,
@@ -260,7 +271,7 @@ def advance_session(session: UserSession, initial_reply: str = "") -> PlanningRe
     if session.target_workers is None:
         session.step = Step.ASKING_WORKERS
         extra = (
-            "Данные собраны. На сколько работников считать план? "
+            f"{info}Данные собраны. На сколько работников считать план? "
             "Ответьте числом (например, 2)."
         )
         return PlanningResult(session, _reply(initial_reply, extra))
