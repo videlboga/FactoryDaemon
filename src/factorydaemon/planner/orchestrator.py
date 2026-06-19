@@ -131,16 +131,12 @@ def _guess_fallback_type(session: UserSession) -> str | None:
 
 
 def _extract_columns(df: pd.DataFrame, file_type: str) -> tuple[str, str] | None:
-    """Return (position_col, value_col) for known file types."""
+    """Return (position_col, value_col) for known file types. In sequential mode we trust the file type and fall back to the first two columns."""
+    if len(df.columns) < 2:
+        return None
     pos_col = _find_column(df, _POSITION_KEYS)
     if not pos_col:
-        # Fallback: use the first column as a position key if it looks like an id/number.
-        first_col = str(df.columns[0])
-        normalized = ''.join(ch for ch in first_col.lower() if ch.isalnum() or ch == ' ')
-        if any(k in normalized for k in {'№', 'номер', 'пп', 'id', 'код'}):
-            pos_col = first_col
-        else:
-            return None
+        pos_col = str(df.columns[0])
     if file_type == "остатки":
         val_col = _find_column(df, _QUANTITY_KEYS)
     elif file_type == "нормы":
@@ -149,6 +145,10 @@ def _extract_columns(df: pd.DataFrame, file_type: str) -> tuple[str, str] | None
         val_col = _find_column(df, _PRIORITY_KEYS)
     else:
         return None
+    if not val_col:
+        # Sequential fallback: use the first non-position column.
+        candidates = [c for c in df.columns if str(c) != pos_col]
+        val_col = str(candidates[0]) if candidates else None
     if not val_col:
         return None
     return pos_col, val_col
@@ -168,35 +168,18 @@ def ingest_file(session: UserSession, source: str | Path) -> PlanningResult:
     except ParseError as exc:
         return PlanningResult(session, f"Не удалось прочитать файл: {exc}")
 
-    classification = detect_file_type(df)
+    expected_type = _expected_file_type(session)
     logger.info(
-        "File classified as %s (reason: %s), columns: %s",
-        classification.file_type,
-        classification.reason,
+        "Sequential mode: expecting %s, columns: %s",
+        expected_type,
         list(df.columns),
     )
+    classification = FileTypeResult(
+        file_type=expected_type,
+        confidence=1.0,
+        reason=f"Sequential upload step expects {expected_type}.",
+    )
 
-    # If classifier says demand but we already have demands and values are small integers, treat as priorities.
-    if classification.file_type == "остатки" and session.demands:
-        qty_col = _find_column(df, _QUANTITY_KEYS)
-        if qty_col:
-            try:
-                values = pd.to_numeric(df[qty_col], errors="coerce").dropna()
-                if (
-                    len(values) > 0
-                    and values.min() >= 1
-                    and values.max() <= 10
-                    and (values % 1 == 0).all()
-                ):
-                    classification = FileTypeResult(
-                        file_type="приоритеты",
-                        confidence=0.7,
-                        reason=f"Small integer values look like priorities; {classification.reason}",
-                    )
-                    logger.info("Reclassified demand file as priorities due to small integer values")
-                    df = df.rename(columns={qty_col: "Приоритет"})
-            except Exception:
-                pass
     if classification.file_type is None:
         return PlanningResult(
             session,
