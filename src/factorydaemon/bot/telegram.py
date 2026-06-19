@@ -183,12 +183,14 @@ async def handle_errors(event: types.ErrorEvent) -> None:
 async def cmd_start(message: types.Message, state: FSMContext) -> None:
     logging.getLogger(__name__).info("cmd_start from chat_id=%s", message.chat.id)
     await state.set_state(PlanStates.collecting)
+    chat_id = message.chat.id
+    _session_path(chat_id).unlink(missing_ok=True)
     text = """Привет! Я планировщик производственных смен FactoryDaemon.
 
 Пришлите мне файлы или таблицы:
-1. Остатки/объёмы (колонки: позиция, количество)
-2. Нормы времени (колонки: позиция, сек/шт)
-3. Приоритеты (колонки: позиция, приоритет)
+1. Остатки/объёмы (позиция, количество)
+2. Нормы времени (позиция, сек/шт)
+3. Приоритеты (позиция, приоритет или список позиций по порядку)
 
 Когда данных хватит, я составлю план и пришлю Excel."""
     await message.answer(text, parse_mode=ParseMode.MARKDOWN)
@@ -201,7 +203,10 @@ async def cmd_reset(message: types.Message, state: FSMContext) -> None:
     if path.exists():
         os.unlink(path)
     await state.set_state(PlanStates.collecting)
-    await message.answer("Сессия сброшена. Пришлите данные заново.")
+    await message.answer(
+        "Сессия сброшена.\n\n"
+        "Шаг 1: пришлите файл с остатками (позиция, количество)."
+    )
 
 
 @dp.message(Command("plan"))
