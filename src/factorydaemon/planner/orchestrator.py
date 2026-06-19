@@ -130,9 +130,9 @@ def _guess_fallback_type(session: UserSession) -> str | None:
     return None
 
 
-def _extract_columns(df: pd.DataFrame, file_type: str) -> tuple[str, str] | None:
-    """Return (position_col, value_col) for known file types. In sequential mode we trust the file type and fall back to the first two columns."""
-    if len(df.columns) < 2:
+def _extract_columns(df: pd.DataFrame, file_type: str) -> tuple[str, str | None] | None:
+    """Return (position_col, value_col) for known file types. In sequential mode we trust the file type and fall back to the first two columns. Priorities may be a single ordered position column."""
+    if len(df.columns) < 1:
         return None
     pos_col = _find_column(df, _POSITION_KEYS)
     if not pos_col:
@@ -143,14 +143,15 @@ def _extract_columns(df: pd.DataFrame, file_type: str) -> tuple[str, str] | None
         val_col = _find_column(df, _TIME_KEYS)
     elif file_type == "приоритеты":
         val_col = _find_column(df, _PRIORITY_KEYS)
+        # A single-column priority file is an ordered list; no value column.
+        if not val_col and len(df.columns) == 1:
+            return pos_col, None
     else:
         return None
     if not val_col:
         # Sequential fallback: use the first non-position column.
         candidates = [c for c in df.columns if str(c) != pos_col]
         val_col = str(candidates[0]) if candidates else None
-    if not val_col:
-        return None
     return pos_col, val_col
 
 

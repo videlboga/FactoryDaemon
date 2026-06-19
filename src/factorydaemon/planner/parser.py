@@ -137,7 +137,7 @@ def _try_read_csv(text: str, delimiter: str):
         df = pd.read_csv(io.StringIO(text), delimiter=delimiter, dtype=str, keep_default_na=False)
     except Exception:
         return None
-    if df.empty or len(df.columns) <= 1:
+    if df.empty or len(df.columns) < 1:
         return None
     return df
 

@@ -88,13 +88,32 @@ class UserSession:
             if pos and sec is not None and sec > 0:
                 self.norms[pos] = sec
 
-    def update_priorities(self, df: pd.DataFrame, position_col: str, priority_col: str) -> None:
-        """Store priorities table and extract priorities."""
+    def update_priorities(self, df: pd.DataFrame, position_col: str, priority_col: str | None) -> None:
+        """Store priorities table and extract priorities.
+
+        If priority_col is None or its values are empty, the row order itself
+        defines priority (top row = highest priority).
+        """
         self.priorities_df = df
-        for _, row in df.iterrows():
+        use_order = priority_col is None
+        if not use_order and priority_col in df.columns:
+            values = pd.to_numeric(df[priority_col], errors="coerce").dropna()
+            if len(values) == 0:
+                use_order = True
+        else:
+            use_order = True
+
+        n_rows = len(df)
+        for idx, (_, row) in enumerate(df.iterrows()):
             pos = str(row[position_col]).strip()
-            prio = _to_int(row[priority_col])
-            if pos and prio is not None:
+            if not pos or pos.lower() == "nan":
+                continue
+            if use_order:
+                # Top row gets the highest priority number.
+                prio = n_rows - idx
+            else:
+                prio = _to_int(row[priority_col])
+            if prio is not None:
                 self.priorities[pos] = prio
 
     @property
