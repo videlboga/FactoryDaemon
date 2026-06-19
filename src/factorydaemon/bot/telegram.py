@@ -298,7 +298,7 @@ async def handle_text(message: types.Message, state: FSMContext) -> None:
             await message.answer("Введите целое число больше 0 — сколько работников будет в смене.")
             return
         session.target_workers = count
-        session.save()
+        _save_session(session, message.chat.id)
         result = run_planner(session)
         await _send_result(message, result)
         return
