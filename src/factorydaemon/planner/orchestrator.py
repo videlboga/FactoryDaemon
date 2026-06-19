@@ -130,29 +130,43 @@ def _guess_fallback_type(session: UserSession) -> str | None:
     return None
 
 
-def _extract_columns(df: pd.DataFrame, file_type: str) -> tuple[str, str | None] | None:
-    """Return (position_col, value_col) for known file types. In sequential mode we trust the file type and fall back to the first two columns. Priorities may be a single ordered position column."""
+def _extract_columns(df: pd.DataFrame, file_type: str) -> tuple[str, str | None, bool] | None:
+    """Return (position_col, value_col, use_row_order) for known file types.
+
+    In sequential mode we trust the file type and fall back to the first two columns.
+    Priorities may be a single ordered position column (row order = priority).
+    If the priority value column is not a recognised priority header, we treat the
+    file as an ordered list and ignore the numeric values in the second column.
+    """
     if len(df.columns) < 1:
         return None
     pos_col = _find_column(df, _POSITION_KEYS)
     if not pos_col:
         pos_col = str(df.columns[0])
+    use_row_order = False
     if file_type == "остатки":
         val_col = _find_column(df, _QUANTITY_KEYS)
     elif file_type == "нормы":
         val_col = _find_column(df, _TIME_KEYS)
     elif file_type == "приоритеты":
         val_col = _find_column(df, _PRIORITY_KEYS)
-        # A single-column priority file is an ordered list; no value column.
-        if not val_col and len(df.columns) == 1:
-            return pos_col, None
+        if val_col:
+            pass  # explicit priority numbers
+        elif len(df.columns) == 1:
+            # Single-column file: ordered positions only.
+            return pos_col, None, True
+        else:
+            # Fallback second column: treat as ordered list.
+            candidates = [c for c in df.columns if str(c) != pos_col]
+            val_col = str(candidates[0]) if candidates else None
+            use_row_order = True
     else:
         return None
     if not val_col:
         # Sequential fallback: use the first non-position column.
         candidates = [c for c in df.columns if str(c) != pos_col]
         val_col = str(candidates[0]) if candidates else None
-    return pos_col, val_col
+    return pos_col, val_col, use_row_order
 
 
 def _reply(reply: str, extra: str) -> str:
@@ -198,7 +212,7 @@ def ingest_file(session: UserSession, source: str | Path) -> PlanningResult:
             "Причина: " + classification.reason + ".",
         )
 
-    pos_col, val_col = cols
+    pos_col, val_col, use_row_order = cols
     if classification.file_type == "остатки":
         session.update_demands(df, pos_col, val_col)
         reply = f"Принял остатки: {len(session.demands)} позиций."
@@ -206,7 +220,7 @@ def ingest_file(session: UserSession, source: str | Path) -> PlanningResult:
         session.update_norms(df, pos_col, val_col)
         reply = f"Принял нормы: {len(session.norms)} позиций."
     else:
-        session.update_priorities(df, pos_col, val_col)
+        session.update_priorities(df, pos_col, val_col, use_row_order=use_row_order)
         reply = f"Принял приоритеты: {len(session.priorities)} позиций."
 
     return advance_session(session, initial_reply=reply)
@@ -232,11 +246,24 @@ def advance_session(session: UserSession, initial_reply: str = "") -> PlanningRe
         extra = f"Нужны приоритеты для позиций: {positions}{more}. Пришлите файл с приоритетами."
         return PlanningResult(session, _reply(initial_reply, extra))
 
+    # If user already sent a priorities file but some positions are still missing,
+    # assign them the lowest default priority so planning can proceed.
+    for pos in session.missing_priorities_positions:
+        session.priorities[pos] = 0
+
     if not session.is_ready_to_plan:
         return PlanningResult(
             session,
             _reply(initial_reply, "Жду остатки, нормы и приоритеты, чтобы составить план."),
         )
+
+    if session.target_workers is None:
+        session.step = Step.ASKING_WORKERS
+        extra = (
+            "Данные собраны. На сколько работников считать план? "
+            "Ответьте числом (например, 2)."
+        )
+        return PlanningResult(session, _reply(initial_reply, extra))
 
     session.step = Step.READY_TO_PLAN
     return run_planner(session, initial_reply=initial_reply)
@@ -258,6 +285,7 @@ def run_planner(session: UserSession, initial_reply: str = "") -> PlanningResult
         norms=norms,
         shift_hours=session.shift_hours,
         max_positions_per_worker=session.max_positions_per_worker,
+        target_worker_count=session.target_workers,
     )
     session.plan_result = plan_result
     session.warnings = []

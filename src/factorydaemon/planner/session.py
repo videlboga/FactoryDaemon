@@ -29,6 +29,7 @@ class Step(Enum):
     MISSING_NORMS = "missing_norms"
     MISSING_PRIORITIES = "missing_priorities"
     READY_TO_PLAN = "ready_to_plan"
+    ASKING_WORKERS = "asking_workers"
     UNDERLOAD = "underload"
     PLAN_READY = "plan_ready"
     FINISHED = "finished"
@@ -65,6 +66,7 @@ class UserSession:
     asked_for_norms: bool = False
     asked_for_priorities: bool = False
     asked_for_more_priorities_underload: bool = False
+    target_workers: int | None = None
 
     def add_message(self, role: str, text: str) -> None:
         """Append a conversation turn."""

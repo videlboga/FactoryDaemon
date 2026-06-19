@@ -22,7 +22,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from factorydaemon.config import settings
-from factorydaemon.planner.orchestrator import PlanningResult, finish_plan, ingest_file
+from factorydaemon.planner.orchestrator import PlanningResult, finish_plan, ingest_file, run_planner
 from factorydaemon.planner.session import Step, UserSession
 from factorydaemon.services.llm import LLMError, explain_plan_issue
 
@@ -30,6 +30,7 @@ from factorydaemon.services.llm import LLMError, explain_plan_issue
 class PlanStates(StatesGroup):
     collecting = State()
     planning = State()
+    asking_workers = State()
     reporting = State()
 
 
@@ -144,6 +145,8 @@ async def _handle_file_upload(
 
     if result.session.step == Step.FINISHED:
         await state.set_state(PlanStates.collecting)
+    elif result.session.step == Step.ASKING_WORKERS:
+        await state.set_state(PlanStates.asking_workers)
     elif result.session.step == Step.PLAN_READY:
         output = Path(tempfile.gettempdir()) / f"plan_{chat_id}.xlsx"
         result2 = finish_plan(result.session, output)
@@ -231,6 +234,22 @@ async def cmd_plan(message: types.Message, state: FSMContext) -> None:
         await _reply_or_explain(result, message)
 
 
+async def _send_result(message: types.Message, result: PlanningResult) -> None:
+    chat_id = message.chat.id
+    _save_session(result.session, chat_id)
+    if result.session.step.name == "PLAN_READY":
+        output = Path(tempfile.gettempdir()) / f"plan_{chat_id}.xlsx"
+        result2 = finish_plan(result.session, output)
+        _save_session(result2.session, chat_id)
+        if result2.excel_path:
+            document = types.FSInputFile(result2.excel_path)
+            await message.answer_document(document, caption=result2.reply)
+        else:
+            await _reply_or_explain(result2, message)
+    else:
+        await _reply_or_explain(result, message)
+
+
 @dp.message(F.document)
 async def handle_document(message: types.Message, state: FSMContext) -> None:
     logger = logging.getLogger(__name__)
@@ -266,11 +285,28 @@ async def handle_text(message: types.Message, state: FSMContext) -> None:
     text = message.text or ""
     if text.startswith("/"):
         return
+
+    current_state = await state.get_state()
+    session = _load_session(message.chat.id)
+
+    if current_state == PlanStates.asking_workers:
+        try:
+            count = int(text.strip())
+            if count <= 0:
+                raise ValueError
+        except ValueError:
+            await message.answer("Введите целое число больше 0 — сколько работников будет в смене.")
+            return
+        session.target_workers = count
+        session.save()
+        result = run_planner(session)
+        await _send_result(message, result)
+        return
+
     if "\n" in text or "\t" in text or "|" in text:
         await _handle_file_upload(message, state, text.encode("utf-8"), text_source=True)
         return
 
-    session = _load_session(message.chat.id)
     try:
         prompt = f"Пользователь написал: {text}. Текущее состояние сессии: {session.to_dict()}"
         reply = await explain_plan_issue([{"role": "user", "content": prompt}])

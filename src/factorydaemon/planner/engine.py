@@ -105,6 +105,7 @@ def plan(
     norms: NormStorage,
     shift_hours: float = 8.0,
     max_positions_per_worker: int = 3,
+    target_worker_count: int | None = None,
 ) -> PlanResult:
     """Create a shift plan.
 
@@ -114,6 +115,7 @@ def plan(
         norms: NormStorage with seconds per unit for every demanded position.
         shift_hours: length of one shift in hours.
         max_positions_per_worker: hard limit of distinct positions per worker.
+        target_worker_count: if set, plan for exactly this many workers.
 
     Returns:
         PlanResult with assigned workers and any unassigned loads.
@@ -135,30 +137,49 @@ def plan(
             total_seconds=0.0,
         )
 
-    min_workers = max(
-        1, int(total_seconds // shift_seconds) + (1 if total_seconds % shift_seconds else 0)
-    )
+    if target_worker_count is not None and target_worker_count > 0:
+        min_workers = target_worker_count
+    else:
+        min_workers = max(
+            1, int(total_seconds // shift_seconds) + (1 if total_seconds % shift_seconds else 0)
+        )
 
-    # Phase 1: First Fit Decreasing placement into open bins.
-    workers: list[Worker] = []
-    for load in loads:
-        placed = False
-        for worker in workers:
-            if worker.can_fit(load, max_positions_per_worker):
+    if target_worker_count is not None and target_worker_count > 0:
+        # Distribute loads evenly across a fixed number of workers (best-fit by remaining capacity).
+        workers: list[Worker] = [
+            Worker(index=i, capacity_seconds=shift_seconds) for i in range(target_worker_count)
+        ]
+        unassigned: list[PositionLoad] = []
+        for load in loads:
+            candidates = [w for w in workers if w.can_fit(load, max_positions_per_worker)]
+            if not candidates:
+                unassigned.append(load)
+                continue
+            best = max(candidates, key=lambda w: w.remaining_seconds)
+            best.add(load)
+    else:
+        # Phase 1: First Fit Decreasing placement into open bins.
+        workers: list[Worker] = []
+        for load in loads:
+            placed = False
+            for worker in workers:
+                if worker.can_fit(load, max_positions_per_worker):
+                    worker.add(load)
+                    placed = True
+                    break
+            if not placed:
+                worker = Worker(index=len(workers), capacity_seconds=shift_seconds)
                 worker.add(load)
-                placed = True
-                break
-        if not placed:
-            worker = Worker(index=len(workers), capacity_seconds=shift_seconds)
-            worker.add(load)
-            workers.append(worker)
+                workers.append(worker)
 
-    # Phase 2: compact to the minimal number of workers if FFD over-opened bins.
-    if len(workers) > min_workers:
-        workers = _repack(workers, min_workers, max_positions_per_worker, shift_seconds)
+        # Phase 2: compact to the minimal number of workers if FFD over-opened bins.
+        if len(workers) > min_workers:
+            workers = _repack(workers, min_workers, max_positions_per_worker, shift_seconds)
 
-    # Phase 3: back-fill under-loaded workers using remaining slack.
-    _backfill(workers, max_positions_per_worker)
+        # Phase 3: back-fill under-loaded workers using remaining slack.
+        _backfill(workers, max_positions_per_worker)
+
+        unassigned: list[PositionLoad] = []
 
     # Re-sort worker loads by priority for stable output.
     for w in workers:
