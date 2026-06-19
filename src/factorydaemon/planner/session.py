@@ -161,13 +161,24 @@ def _to_float(value: object) -> float | None:
     """Coerce an arbitrary cell value to float."""
     if value is None:
         return None
+    # Handle pandas/numpy NaN without stringifying to 'nan'.
+    try:
+        import math
+        if isinstance(value, float) and math.isnan(value):
+            return None
+    except Exception:
+        pass
     text = str(value).strip().replace(",", ".")
     if not text:
         return None
     try:
-        return float(text)
+        result = float(text)
     except ValueError:
         return None
+    import math
+    if math.isnan(result):
+        return None
+    return result
 
 
 def _to_int(value: object) -> int | None:
