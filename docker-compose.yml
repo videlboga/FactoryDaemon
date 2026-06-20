@@ -1,0 +1,20 @@
+services:
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ghcr.io/videlboga/factorydaemon:${FACTORYDAEMON_IMAGE_TAG:-main}
+    container_name: factorydaemon-bot
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Store the SQLite database inside the persisted data volume.
+      FD_DATABASE_URL: sqlite+aiosqlite:///./data/factorydaemon.db
+    volumes:
+      - ./data:/app/data
+      - ./tmp_uploads:/tmp/factorydaemon-uploads
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
