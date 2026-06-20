@@ -116,11 +116,7 @@ class UserSession:
             pos = str(row[position_col]).strip()
             if not pos or pos.lower() == "nan":
                 continue
-            if use_order:
-                # Top row gets the highest priority number.
-                prio = n_rows - idx
-            else:
-                prio = _to_int(row[priority_col])
+            prio = n_rows - idx if use_order else _to_int(row[priority_col])
             if prio is not None:
                 self.priorities[pos] = prio
 
@@ -191,6 +187,7 @@ def _to_float(value: object) -> float | None:
     # Handle pandas/numpy NaN without stringifying to 'nan'.
     try:
         import math
+
         if isinstance(value, float) and math.isnan(value):
             return None
     except Exception:
@@ -203,6 +200,7 @@ def _to_float(value: object) -> float | None:
     except ValueError:
         return None
     import math
+
     if math.isnan(result):
         return None
     return result

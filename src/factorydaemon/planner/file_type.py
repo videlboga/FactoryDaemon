@@ -62,8 +62,6 @@ _POSITION_KEYS = frozenset(
         "№_пп",
         "№пп",
         "номер",
-        "id",
-        "код",
     }
 )
 _QUANTITY_KEYS = frozenset(
@@ -249,7 +247,9 @@ def detect_file_type(df: pd.DataFrame) -> FileTypeResult:
             return FileTypeResult(
                 file_type="приоритеты",
                 confidence=0.7,
-                reason=f"Position column + small integer values look like priority ranks. {evidence}.",
+                reason=(
+                    f"Position column + small integer values look like priority ranks. {evidence}."
+                ),
             )
         confidence = best_score / (total_evidence + 1)
         reason = f"Ambiguous header signals: {evidence}. Matched columns: {matched_by_header}."
@@ -282,7 +282,12 @@ def detect_file_type(df: pd.DataFrame) -> FileTypeResult:
                 values = pd.to_numeric(df[col], errors="coerce").dropna()
             except Exception:
                 continue
-            if len(values) > 0 and values.min() >= 1 and values.max() <= 10 and (values % 1 == 0).all():
+            if (
+                len(values) > 0
+                and values.min() >= 1
+                and values.max() <= 10
+                and (values % 1 == 0).all()
+            ):
                 best_type = "приоритеты"
                 confidence = max(0.7, confidence - 0.1)
                 reason = f"Small integer values look like priorities; {reason}"

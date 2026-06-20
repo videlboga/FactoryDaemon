@@ -141,8 +141,12 @@ def plan(
         )
 
     # Determine how many workers are actually required.
-    min_by_time = max(1, int(total_seconds // shift_seconds) + (1 if total_seconds % shift_seconds else 0))
-    min_by_positions = max(1, (len(loads) + max_positions_per_worker - 1) // max_positions_per_worker)
+    min_by_time = max(
+        1, int(total_seconds // shift_seconds) + (1 if total_seconds % shift_seconds else 0)
+    )
+    min_by_positions = max(
+        1, (len(loads) + max_positions_per_worker - 1) // max_positions_per_worker
+    )
     min_workers = max(min_by_time, min_by_positions)
 
     if target_worker_count is not None and target_worker_count > 0:
@@ -196,7 +200,6 @@ def _distribute_fixed_workers(
         best = max(candidates, key=lambda w: w.remaining_seconds)
         best.add(load)
     return workers, unassigned
-
 
 
 def _repack(
