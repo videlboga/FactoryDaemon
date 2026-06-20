@@ -11,10 +11,8 @@ import csv
 import io
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    import pandas as pd
+import pandas as pd
 
 
 class ParseError(ValueError):
@@ -107,7 +105,6 @@ def _sniff_csv_delimiter(text: str) -> str:
 
 
 def _parse_csv(path: Path) -> pd.DataFrame:
-    import pandas as pd
 
     if not path.exists():
         raise ParseError(f"File not found: {path}")
@@ -129,9 +126,8 @@ def _parse_csv(path: Path) -> pd.DataFrame:
     return df
 
 
-def _try_read_csv(text: str, delimiter: str):
+def _try_read_csv(text: str, delimiter: str) -> pd.DataFrame | None:
     """Attempt to parse CSV; return None if result looks malformed."""
-    import pandas as pd
 
     try:
         df = pd.read_csv(io.StringIO(text), delimiter=delimiter, dtype=str, keep_default_na=False)

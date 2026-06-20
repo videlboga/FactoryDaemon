@@ -135,7 +135,12 @@ async def _handle_file_upload(
         os.unlink(tmp_path)
 
     _save_session(result.session, chat_id)
-    logger.info("ingest result chat_id=%s step=%s reply=%r", chat_id, result.session.step, result.reply[:120])
+    logger.info(
+        "ingest result chat_id=%s step=%s reply=%r",
+        chat_id,
+        result.session.step,
+        result.reply[:120],
+    )
 
     if result.excel_path:
         document = types.FSInputFile(result.excel_path)
@@ -207,8 +212,7 @@ async def cmd_reset(message: types.Message, state: FSMContext) -> None:
         os.unlink(path)
     await state.set_state(PlanStates.collecting)
     await message.answer(
-        "Сессия сброшена.\n\n"
-        "Шаг 1: пришлите файл с остатками (позиция, количество)."
+        "Сессия сброшена.\n\nШаг 1: пришлите файл с остатками (позиция, количество)."
     )
 
 

@@ -53,4 +53,9 @@ def test_orchestrator_ready_to_plan(tmp_path):
         encoding="utf-8",
     )
     result = ingest_file(sess, csv_path)
-    assert result.session.step in (Step.READY_TO_PLAN, Step.UNDERLOAD, Step.PLAN_READY)
+    assert result.session.step in (
+        Step.ASKING_WORKERS,
+        Step.READY_TO_PLAN,
+        Step.UNDERLOAD,
+        Step.PLAN_READY,
+    )

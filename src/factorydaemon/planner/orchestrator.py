@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 import pandas as pd
 
 from factorydaemon.planner.engine import plan as plan_shift
-from factorydaemon.planner.file_type import FileTypeResult, detect_file_type
+from factorydaemon.planner.file_type import FileTypeResult
 from factorydaemon.planner.parser import ParseError, parse_file
 from factorydaemon.planner.session import Step, UserSession
 from factorydaemon.planner.validator import ValidationError, check_plan, validate_plan_inputs
@@ -106,8 +106,6 @@ def _find_column(df: pd.DataFrame, keys: set[str]) -> str | None:
         if normalized in keys or any(normalized.startswith(k + "_") for k in keys):
             return str(col)
     return None
-
-
 
 
 def _expected_file_type(session: UserSession) -> str:
@@ -213,6 +211,12 @@ def ingest_file(session: UserSession, source: str | Path) -> PlanningResult:
         )
 
     pos_col, val_col, use_row_order = cols
+    if not val_col:
+        return PlanningResult(
+            session,
+            "Определил файл как " + classification.file_type + ", но не нашёл значащей колонки. "
+            "Причина: " + classification.reason + ".",
+        )
     if classification.file_type == "остатки":
         session.update_demands(df, pos_col, val_col)
         reply = f"Принял остатки: {len(session.demands)} позиций."
