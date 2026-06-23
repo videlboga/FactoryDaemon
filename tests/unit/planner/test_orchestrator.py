@@ -52,6 +52,25 @@ def test_orchestrator_reports_when_target_workers_insufficient(tmp_path):
     assert result.session.step in (Step.PLAN_READY, Step.UNDERLOAD)
 
 
+def test_orchestrator_caps_plan_by_stock(tmp_path):
+    sess = UserSession(session_id="test")
+    sess.demands = {"A": 10.0}
+    sess.norms = {"A": 3600.0}
+    sess.priorities = {"A": 1}
+    # Plan file says 50 units, but only 10 are in stock.
+    csv_path = tmp_path / "plan.csv"
+    csv_path.write_text(
+        """Позиция,Количество
+A,50
+""",
+        encoding="utf-8",
+    )
+    result = ingest_file(sess, csv_path)
+    assert result.session.plan_quantities == {"A": 50.0}
+    assert result.session.effective_demands() == {"A": 10.0}
+    assert "превышает остаток" in result.reply.lower()
+
+
 if __name__ == "__main__":
     import pytest
 

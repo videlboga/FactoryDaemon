@@ -62,25 +62,43 @@ def test_ready_to_plan_requires_all_inputs():
     sess.norms = {"A": 5.0}
     assert sess.is_ready_to_plan is False
     sess.priorities = {"A": 1}
+    # No plan quantity yet, so stock has no cap and becomes the effective demand.
     assert sess.is_ready_to_plan is True
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
 
 
-def test_update_priorities_plan_file_sets_demands():
+def test_update_priorities_plan_file_sets_plan_quantities_not_demands():
     sess = UserSession(session_id="test")
     df = pd.DataFrame({"позиция": ["A", "B", "C"], "количество": [100.0, 200.0, 300.0]})
     sess.update_priorities(df, "позиция", "количество", is_plan_file=True)
-    assert sess.demands == {"A": 100.0, "B": 200.0, "C": 300.0}
+    assert sess.plan_quantities == {"A": 100.0, "B": 200.0, "C": 300.0}
+    assert sess.demands == {}
     assert sess.priorities["A"] == 3
     assert sess.priorities["B"] == 2
     assert sess.priorities["C"] == 1
 
 
-def test_update_priorities_default_uses_column_as_priority():
+def test_effective_demands_caps_plan_by_stock():
     sess = UserSession(session_id="test")
-    df = pd.DataFrame({"позиция": ["A", "B", "C"], "приоритет": [1, 2, 3]})
-    sess.update_priorities(df, "позиция", "приоритет")
-    assert sess.priorities == {"A": 1, "B": 2, "C": 3}
-    assert sess.demands == {}
+    sess.demands = {"A": 50.0, "B": 200.0}
+    sess.plan_quantities = {"A": 100.0, "B": 150.0, "C": 300.0}
+    sess.priorities = {"A": 1, "B": 2, "C": 3}
+    # C has no stock, so it drops out; A is capped by stock; B is capped by plan.
+    assert sess.effective_demands() == {"A": 50.0, "B": 150.0}
+
+
+def test_effective_demands_uses_stock_when_no_plan():
+    sess = UserSession(session_id="test")
+    sess.demands = {"A": 10.0, "B": 20.0}
+    sess.priorities = {"A": 1, "B": 2}
+    assert sess.effective_demands() == {"A": 10.0, "B": 20.0}
+
+
+def test_effective_demands_ignores_stock_without_priority():
+    sess = UserSession(session_id="test")
+    sess.demands = {"A": 10.0, "B": 20.0}
+    sess.priorities = {"A": 1}
+    assert sess.effective_demands() == {"A": 10.0}

@@ -37,7 +37,11 @@ class UserSession:
     norms_df: pd.DataFrame | None = None
     priorities_df: pd.DataFrame | None = None
 
+    # Stock (остатки) uploaded as the first file.
     demands: dict[str, float] = field(default_factory=dict)
+    # Planned quantities from the third (plan) file. Stored separately so the
+    # planner can cap demand by available stock.
+    plan_quantities: dict[str, float] = field(default_factory=dict)
     norms: dict[str, float] = field(default_factory=dict)
     priorities: dict[str, int] = field(default_factory=dict)
     extra_priorities: dict[str, int] = field(default_factory=dict)
@@ -58,11 +62,11 @@ class UserSession:
 
     @property
     def missing_priorities_positions(self) -> list[str]:
-        return [p for p in self.demands if p not in self.priorities]
+        return [p for p in self.effective_demands() if p not in self.priorities]
 
     @property
     def is_ready_to_plan(self) -> bool:
-        return bool(self.demands and self.norms and self.priorities)
+        return bool(self.effective_demands() and self.norms and self.priorities)
 
     def add_message(self, role: str, text: str) -> None:
         self.history.append({"role": role, "text": text})
@@ -128,7 +132,7 @@ class UserSession:
             if is_plan_file and priority_col is not None and priority_col in df.columns:
                 qty = _to_float(row[priority_col])
                 if qty is not None and qty > 0:
-                    self.demands[pos] = qty
+                    self.plan_quantities[pos] = self.plan_quantities.get(pos, 0.0) + qty
 
             if use_order:
                 prio = n_rows - idx
@@ -141,6 +145,24 @@ class UserSession:
         """Add priorities for additional positions (stock backfill)."""
         self.update_priorities(df, position_col, priority_col, extra=True)
 
+    def effective_demands(self) -> dict[str, float]:
+        """Return demand capped by available stock.
+
+        Only positions that have a priority are planned. For each such position
+        the effective quantity is the smaller of the planned quantity and the
+        available stock. If no plan quantity was provided for a position, the
+        full stock is used.
+        """
+        effective: dict[str, float] = {}
+        for pos in self.priorities:
+            stock = self.demands.get(pos, 0.0)
+            plan = self.plan_quantities.get(pos)
+            if plan is not None:
+                effective[pos] = min(stock, plan)
+            else:
+                effective[pos] = stock
+        return {pos: qty for pos, qty in effective.items() if qty > 0}
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "session_id": self.session_id,
@@ -149,6 +171,7 @@ class UserSession:
             "underload_threshold": self.underload_threshold,
             "target_workers": self.target_workers,
             "demands": dict(self.demands),
+            "plan_quantities": dict(self.plan_quantities),
             "norms": dict(self.norms),
             "priorities": dict(self.priorities),
             "extra_priorities": dict(self.extra_priorities),
@@ -170,6 +193,7 @@ class UserSession:
             target_workers=cast(int | None, data.get("target_workers", None)),
         )
         sess.demands = cast(dict[str, float], data.get("demands", {}))
+        sess.plan_quantities = cast(dict[str, float], data.get("plan_quantities", {}))
         sess.norms = cast(dict[str, float], data.get("norms", {}))
         sess.priorities = cast(dict[str, int], data.get("priorities", {}))
         sess.extra_priorities = cast(dict[str, int], data.get("extra_priorities", {}))
