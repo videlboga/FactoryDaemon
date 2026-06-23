@@ -1,14 +1,4 @@
-"""User session state for FactoryDaemon bot conversations.
-
-A session tracks all files and data uploaded during one planning conversation
-and drives the multi-step pipeline:
-
-1. Collect остатки (demands), нормы (norms), приоритеты (priorities).
-2. Detect missing data and ask the user for clarification.
-3. Run the planner and detect underload.
-4. Optionally ask for additional priorities and re-plan.
-5. Generate the final Excel report.
-"""
+"""User session state for FactoryDaemon bot conversations."""
 
 from __future__ import annotations
 
@@ -18,16 +8,17 @@ from typing import TYPE_CHECKING, Any, cast
 
 import pandas as pd
 
+from factorydaemon.planner.normalizer import normalize_position
+
 if TYPE_CHECKING:
     from factorydaemon.planner.engine import PlanResult
 
 
 class Step(Enum):
-    """Conversation step in a planning session."""
-
     COLLECTING = "collecting"
     MISSING_NORMS = "missing_norms"
     MISSING_PRIORITIES = "missing_priorities"
+    ASKING_WORKERS = "asking_workers"
     READY_TO_PLAN = "ready_to_plan"
     UNDERLOAD = "underload"
     PLAN_READY = "plan_ready"
@@ -36,56 +27,66 @@ class Step(Enum):
 
 @dataclass
 class UserSession:
-    """Holds the full context of one user planning session."""
-
     session_id: str
-    shift_hours: float = 8.0
-    max_positions_per_worker: int = 3
-    underload_threshold: float = 0.75
+    shift_hours: float = 10.0
+    max_positions_per_worker: int = 5
+    underload_threshold: float = 0.95
+    target_workers: int | None = None
 
-    # Raw parsed tables
     demands_df: pd.DataFrame | None = None
     norms_df: pd.DataFrame | None = None
     priorities_df: pd.DataFrame | None = None
 
-    # Extracted/cleaned values (position -> value)
     demands: dict[str, float] = field(default_factory=dict)
     norms: dict[str, float] = field(default_factory=dict)
     priorities: dict[str, int] = field(default_factory=dict)
+    extra_priorities: dict[str, int] = field(default_factory=dict)
 
-    # Planning results
     plan_result: PlanResult | None = None
     warnings: list[str] = field(default_factory=list)
 
-    # Conversation state
     step: Step = Step.COLLECTING
     history: list[dict[str, str]] = field(default_factory=list)
 
-    # Keep track of what we have already asked for to avoid loops
     asked_for_norms: bool = False
     asked_for_priorities: bool = False
     asked_for_more_priorities_underload: bool = False
 
+    @property
+    def missing_norms_positions(self) -> list[str]:
+        return [p for p in self.demands if p not in self.norms]
+
+    @property
+    def missing_priorities_positions(self) -> list[str]:
+        return [p for p in self.demands if p not in self.priorities]
+
+    @property
+    def is_ready_to_plan(self) -> bool:
+        return bool(self.demands and self.norms and self.priorities)
+
     def add_message(self, role: str, text: str) -> None:
-        """Append a conversation turn."""
         self.history.append({"role": role, "text": text})
 
     def update_demands(self, df: pd.DataFrame, position_col: str, quantity_col: str) -> None:
-        """Store demand table and extract demands."""
         self.demands_df = df
         for _, row in df.iterrows():
-            pos = str(row[position_col]).strip()
+            raw = str(row[position_col]).strip()
+            if not raw or raw.lower() == "nan":
+                continue
+            pos = normalize_position(raw)
             qty = _to_float(row[quantity_col])
-            if pos and qty is not None and qty > 0:
-                self.demands[pos] = qty
+            if qty is not None and qty > 0:
+                self.demands[pos] = self.demands.get(pos, 0.0) + qty
 
     def update_norms(self, df: pd.DataFrame, position_col: str, time_col: str) -> None:
-        """Store norms table and extract seconds per unit."""
         self.norms_df = df
         for _, row in df.iterrows():
-            pos = str(row[position_col]).strip()
+            raw = str(row[position_col]).strip()
+            if not raw or raw.lower() == "nan":
+                continue
+            pos = normalize_position(raw)
             sec = _to_float(row[time_col])
-            if pos and sec is not None and sec > 0:
+            if sec is not None and sec > 0:
                 self.norms[pos] = sec
 
     def update_priorities(
@@ -95,62 +96,62 @@ class UserSession:
         priority_col: str | None,
         *,
         use_row_order: bool = False,
+        extra: bool = False,
+        is_plan_file: bool = False,
     ) -> None:
-        """Store priorities table and extract priorities.
+        """Store priorities for positions.
 
-        If use_row_order is True (or priority_col is None and use_row_order is True),
-        the row order itself defines priority (top row = highest priority).
-        Otherwise explicit numeric priority values are used.
+        When ``is_plan_file`` is True, the second column is treated as the planned
+        quantity (demand) and priorities are derived from row order. Otherwise the
+        second column is treated as an explicit priority value.
         """
-        self.priorities_df = df
-        use_order = use_row_order or priority_col is None
-        if not use_order and priority_col in df.columns:
-            values = pd.to_numeric(df[priority_col], errors="coerce").dropna()
-            if len(values) == 0:
-                use_order = True
+        target = self.extra_priorities if extra else self.priorities
+        if not extra:
+            self.priorities_df = df
+
+        if is_plan_file:
+            use_order = True
+        else:
+            use_order = use_row_order or priority_col is None
+            if not use_order and priority_col in df.columns:
+                values = pd.to_numeric(df[priority_col], errors="coerce").dropna()
+                if len(values) == 0:
+                    use_order = True
 
         n_rows = len(df)
         for idx, (_, row) in enumerate(df.iterrows()):
-            pos = str(row[position_col]).strip()
-            if not pos or pos.lower() == "nan":
+            raw = str(row[position_col]).strip()
+            if not raw or raw.lower() == "nan":
                 continue
+            pos = normalize_position(raw)
+
+            if is_plan_file and priority_col is not None and priority_col in df.columns:
+                qty = _to_float(row[priority_col])
+                if qty is not None and qty > 0:
+                    self.demands[pos] = qty
+
             if use_order:
-                # Top row gets the highest priority number.
                 prio = n_rows - idx
             else:
                 prio = _to_int(row[priority_col])
             if prio is not None:
-                self.priorities[pos] = prio
+                target[pos] = prio
 
-    @property
-    def missing_norms_positions(self) -> list[str]:
-        """Demand positions with no known norm."""
-        return [p for p in self.demands if p not in self.norms]
-
-    @property
-    def missing_priorities_positions(self) -> list[str]:
-        """Demand positions with no known priority."""
-        return [p for p in self.demands if p not in self.priorities]
-
-    @property
-    def is_ready_to_plan(self) -> bool:
-        """True when demands, norms and priorities are complete."""
-        return bool(
-            self.demands
-            and not self.missing_norms_positions
-            and not self.missing_priorities_positions
-        )
+    def add_extra_priorities(self, df: pd.DataFrame, position_col: str, priority_col: str | None = None) -> None:
+        """Add priorities for additional positions (stock backfill)."""
+        self.update_priorities(df, position_col, priority_col, extra=True)
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize to plain dict for persistence."""
         return {
             "session_id": self.session_id,
             "shift_hours": self.shift_hours,
             "max_positions_per_worker": self.max_positions_per_worker,
             "underload_threshold": self.underload_threshold,
+            "target_workers": self.target_workers,
             "demands": dict(self.demands),
             "norms": dict(self.norms),
             "priorities": dict(self.priorities),
+            "extra_priorities": dict(self.extra_priorities),
             "step": self.step.value,
             "warnings": list(self.warnings),
             "asked_for_norms": self.asked_for_norms,
@@ -161,16 +162,17 @@ class UserSession:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> UserSession:
-        """Restore session from dict."""
         sess = cls(
             session_id=cast(str, data.get("session_id", "")),
-            shift_hours=cast(float, data.get("shift_hours", 8.0)),
-            max_positions_per_worker=cast(int, data.get("max_positions_per_worker", 3)),
-            underload_threshold=cast(float, data.get("underload_threshold", 0.75)),
+            shift_hours=cast(float, data.get("shift_hours", 10.0)),
+            max_positions_per_worker=cast(int, data.get("max_positions_per_worker", 5)),
+            underload_threshold=cast(float, data.get("underload_threshold", 0.95)),
+            target_workers=cast(int | None, data.get("target_workers", None)),
         )
         sess.demands = cast(dict[str, float], data.get("demands", {}))
         sess.norms = cast(dict[str, float], data.get("norms", {}))
         sess.priorities = cast(dict[str, int], data.get("priorities", {}))
+        sess.extra_priorities = cast(dict[str, int], data.get("extra_priorities", {}))
         sess.step = Step(cast(str, data.get("step", "collecting")))
         sess.warnings = cast(list[str], data.get("warnings", []))
         sess.asked_for_norms = cast(bool, data.get("asked_for_norms", False))
@@ -183,10 +185,8 @@ class UserSession:
 
 
 def _to_float(value: object) -> float | None:
-    """Coerce an arbitrary cell value to float."""
     if value is None:
         return None
-    # Handle pandas/numpy NaN without stringifying to 'nan'.
     try:
         import math
         if isinstance(value, float) and math.isnan(value):
@@ -207,7 +207,6 @@ def _to_float(value: object) -> float | None:
 
 
 def _to_int(value: object) -> int | None:
-    """Coerce an arbitrary cell value to int."""
     f = _to_float(value)
     if f is None:
         return None

@@ -19,13 +19,13 @@ def _norms() -> NormStorage:
     )
 
 
-def test_validate_inputs_missing_norms():
+def test_validate_inputs_missing_norms_are_not_errors():
     errors = validate_plan_inputs(
         demands={"cut": 10, "unknown": 5},
         priorities={"cut": 1, "unknown": 1},
         norms=_norms(),
     )
-    assert any(e.code == "MISSING_NORMS" for e in errors)
+    assert not any(e.code == "MISSING_NORMS" for e in errors)
 
 
 def test_validate_inputs_zero_volume():
@@ -37,13 +37,13 @@ def test_validate_inputs_zero_volume():
     assert any(e.code == "INVALID_VOLUME" for e in errors)
 
 
-def test_validate_inputs_missing_priority():
+def test_validate_inputs_missing_priority_are_not_errors():
     errors = validate_plan_inputs(
         demands={"cut": 10},
         priorities={},
         norms=_norms(),
     )
-    assert any(e.code == "MISSING_PRIORITY" for e in errors)
+    assert not any(e.code == "MISSING_PRIORITY" for e in errors)
 
 
 def test_validate_inputs_no_demand():
@@ -96,7 +96,7 @@ def test_validate_result_overload():
     assert any(e.code == "OVERLOAD" for e in errors)
 
 
-def test_validate_result_missing_in_plan():
+def test_validate_result_missing_norm_is_not_error():
     norms = _norms()
     result = plan(
         demands={"cut": 1},
@@ -104,7 +104,8 @@ def test_validate_result_missing_in_plan():
         norms=norms,
     )
     errors = validate_plan_result(result, {"cut": 1, "sew": 1}, shift_hours=8)
-    assert any(e.code == "MISSING_IN_PLAN" for e in errors)
+    # sew has no norm, so it is legitimately missing from the plan.
+    assert not any(e.code == "MISSING_IN_PLAN" for e in errors)
 
 
 def test_check_plan_passes_for_valid_plan():

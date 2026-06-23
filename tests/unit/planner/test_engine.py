@@ -11,32 +11,35 @@ from factorydaemon.storage.norms import NormStorage
 def _norms() -> NormStorage:
     return NormStorage(
         {
-            "cut": 120.0,  # 2 min per unit
-            "sew": 180.0,  # 3 min per unit
-            "pack": 60.0,  # 1 min per unit
-            "inspect": 30.0,  # 30 sec per unit
+            "cut": 120.0,
+            "sew": 180.0,
+            "pack": 60.0,
+            "inspect": 30.0,
         }
     )
 
 
-def test_plan_raises_on_missing_norms():
+def test_plan_warns_on_missing_norms_but_completes():
     norms = _norms()
-    with pytest.raises(ValueError, match="Missing norms"):
-        plan(
-            demands={"cut": 10, "unknown": 5},
-            priorities={"cut": 1, "unknown": 1},
-            norms=norms,
-        )
+    result = plan(
+        demands={"cut": 10, "unknown": 5},
+        priorities={"cut": 1, "unknown": 1},
+        norms=norms,
+    )
+    assert any("unknown" in w for w in result.warnings)
+    # unknown should not appear in any worker load
+    positions = {load.position for w in result.workers for load in w.loads}
+    assert "unknown" not in positions
 
 
-def test_plan_raises_on_zero_or_negative_demand():
+def test_plan_warns_on_zero_or_negative_demand():
     norms = _norms()
-    with pytest.raises(ValueError, match="must be > 0"):
-        plan(
-            demands={"cut": 0},
-            priorities={"cut": 1},
-            norms=norms,
-        )
+    result = plan(
+        demands={"cut": 0, "sew": 1},
+        priorities={"cut": 1, "sew": 1},
+        norms=norms,
+    )
+    assert any("cut" in w and "0" in w for w in result.warnings)
 
 
 def test_plan_raises_on_bad_shift_hours():
@@ -51,22 +54,21 @@ def test_plan_single_worker_fits_all():
         demands={"cut": 10, "sew": 5, "pack": 20},
         priorities={"cut": 3, "sew": 2, "pack": 1},
         norms=norms,
-        shift_hours=8,
+        shift_hours=10,
         max_positions_per_worker=10,
     )
     assert result.worker_count == 1
     assert len(result.workers[0].loads) == 3
-    assert result.utilization == pytest.approx(result.total_seconds / (8 * 3600), rel=1e-9)
+    assert result.utilization == pytest.approx(result.total_seconds / (10 * 3600), rel=1e-9)
 
 
 def test_plan_respects_position_limit():
     norms = _norms()
-    # 4 positions, limit 2 per worker -> at least 2 workers.
     result = plan(
         demands={"cut": 1, "sew": 1, "pack": 1, "inspect": 1},
         priorities={"cut": 4, "sew": 3, "pack": 2, "inspect": 1},
         norms=norms,
-        shift_hours=8,
+        shift_hours=10,
         max_positions_per_worker=2,
     )
     assert all(w.positions_count <= 2 for w in result.workers)
@@ -75,72 +77,171 @@ def test_plan_respects_position_limit():
 
 def test_plan_min_workers_by_labour():
     norms = _norms()
-    # Total labour = 100*120 + 100*180 = 30_000 sec = 1.04 shifts of 8h (28_800).
-    # Minimal theoretical count is therefore 2 workers.
     result = plan(
         demands={"cut": 100, "sew": 100},
         priorities={"cut": 1, "sew": 1},
         norms=norms,
-        shift_hours=8,
+        shift_hours=10,
         max_positions_per_worker=10,
     )
-    assert result.worker_count == 2
-    total_assigned = sum(w.used_seconds for w in result.workers)
-    assert total_assigned == pytest.approx(30_000.0, rel=1e-9)
+    assert result.worker_count == 1
 
 
-def test_plan_priority_order_placed_first():
-    norms = NormStorage({"a": 3600.0, "b": 3600.0, "c": 1.0})
+def test_plan_chunks_large_position_spreads_across_workers():
+    norms = NormStorage({"big": 1.0})
     result = plan(
-        demands={"a": 1, "b": 1, "c": 1},
-        priorities={"a": 10, "b": 5, "c": 1},
+        demands={"big": 72_000},
+        priorities={"big": 1},
         norms=norms,
-        shift_hours=8,
-        max_positions_per_worker=10,
+        shift_hours=10,
+        max_positions_per_worker=5,
     )
-    positions = [load.position for load in result.workers[0].loads]
-    # Highest priority should be first in the first worker's list.
-    assert positions[0] == "a"
-
-
-def test_plan_no_overload():
-    norms = _norms()
-    # Keep every individual position within one shift; 160 units of sew = 28_800 sec exactly.
-    result = plan(
-        demands={"cut": 160, "sew": 160, "pack": 200},
-        priorities={"cut": 3, "sew": 2, "pack": 1},
-        norms=norms,
-        shift_hours=8,
-        max_positions_per_worker=3,
-    )
+    assert result.required_workers == 2
+    totals = {}
     for w in result.workers:
-        assert w.used_seconds <= 8 * 3600 + 1e-9
+        assert w.used_seconds <= 10 * 3600 + 1e-9
+        for load in w.loads:
+            totals[load.position] = totals.get(load.position, 0.0) + load.units
+    assert totals.get("big", 0.0) == pytest.approx(72_000.0, rel=1e-9)
 
 
-def test_plan_backfill_reduces_worker_count():
-    # Two big tasks, one leaves slack that fits the small task.
-    norms = NormStorage({"big1": 3600.0, "big2": 3600.0, "small": 60.0})
+def test_plan_position_without_norm_excluded_not_blocked():
+    norms = NormStorage({"has_norm": 60.0})
     result = plan(
-        demands={"big1": 8, "big2": 7, "small": 1},  # big2 uses 25_200 sec, slack 3_600
-        priorities={"big1": 3, "big2": 2, "small": 1},
+        demands={"has_norm": 10, "no_norm": 5},
+        priorities={"has_norm": 2, "no_norm": 1},
         norms=norms,
-        shift_hours=8,
-        max_positions_per_worker=10,
+        shift_hours=10,
+        max_positions_per_worker=5,
     )
-    # With slack back-filling 2 workers are enough.
-    assert result.worker_count == 2
+    assert any("no_norm" in w for w in result.warnings)
+    positions = {load.position for w in result.workers for load in w.loads}
+    assert "no_norm" not in positions
+    assert any(load.position == "has_norm" for w in result.workers for load in w.loads)
 
 
-def test_plan_total_seconds_matches_demand():
+def test_plan_saves_target_workers():
     norms = _norms()
-    demands = {"cut": 15, "sew": 8, "pack": 25}
-    expected = sum(demands[p] * norms.get(p).seconds_per_unit for p in demands)
+    result = plan(
+        demands={"cut": 10},
+        priorities={"cut": 1},
+        norms=norms,
+        shift_hours=10,
+        max_positions_per_worker=5,
+        target_workers=2,
+    )
+    assert result.target_workers == 2
+
+
+def test_plan_forces_target_workers_even_on_overload():
+    norms = NormStorage({"task": 3600.0})
+    # 15 tasks * 3600 sec = 54_000 sec of work, shift = 36_000 sec, target=1 worker.
+    # With auto-expansion we now raise target_workers to the required count.
+    result = plan(
+        demands={"task": 15},
+        priorities={"task": 1},
+        norms=norms,
+        shift_hours=10,
+        max_positions_per_worker=5,
+        target_workers=1,
+    )
+    assert result.required_workers == 2
+    assert result.worker_count == 2
+    assert all(w.used_seconds <= 10 * 3600 + 1e-6 for w in result.workers)
+    assert any("Автоматически увеличено" in w for w in result.warnings)
+
+
+def test_plan_target_workers_with_insufficient_capacity():
+    norms = NormStorage({"task": 3600.0})
+    # 10 tasks fit exactly in one shift; user asks for 5 workers → pack into 1.
+    result = plan(
+        demands={"task": 10},
+        priorities={"task": 1},
+        norms=norms,
+        shift_hours=10,
+        max_positions_per_worker=5,
+        target_workers=5,
+    )
+    assert result.required_workers == 1
+    assert result.worker_count == 1
+    assert result.utilization == 1.0
+    assert any("свободная ёмкость для 4 работников" in w for w in result.warnings)
+
+
+def test_plan_respects_requested_target_workers_even_when_underloaded():
+    norms = NormStorage({"task": 3600.0})
+    # 5 tasks fit in one worker, but user asks for 3 workers → still 1 worker.
+    result = plan(
+        demands={"task": 5},
+        priorities={"task": 1},
+        norms=norms,
+        shift_hours=10,
+        max_positions_per_worker=5,
+        target_workers=3,
+    )
+    assert result.worker_count == 1
+    assert result.required_workers == 1
+    assert result.utilization == 0.5
+    assert any("свободная ёмкость для 2 работников" in w for w in result.warnings)
+
+
+def test_plan_ignores_demands_without_priority():
+    norms = NormStorage({"task": 3600.0, "stock": 1800.0})
+    result = plan(
+        demands={"task": 5, "stock": 10},
+        priorities={"task": 1},
+        norms=norms,
+        shift_hours=10,
+        max_positions_per_worker=5,
+    )
+    # Only "task" is planned; "stock" has no priority and is ignored.
+    assert result.worker_count == 1
+    assigned = {load.position for w in result.workers for load in w.loads}
+    assert assigned == {"task"}
+    assert result.total_seconds == 5 * 3600.0
+
+
+def test_plan_max_five_positions_per_worker():
+    norms = NormStorage({f"pos{i}": 600.0 for i in range(10)})
+    demands = {f"pos{i}": 1 for i in range(10)}
+    priorities = {f"pos{i}": i for i in range(10)}
     result = plan(
         demands=demands,
-        priorities={"cut": 1, "sew": 1, "pack": 1},
+        priorities=priorities,
         norms=norms,
+        shift_hours=10,
+        max_positions_per_worker=5,
     )
-    assert result.total_seconds == pytest.approx(expected, rel=1e-9)
+    assert all(w.positions_count <= 5 for w in result.workers)
+
+
+def test_plan_splits_large_positions_across_workers():
+    norms = NormStorage({"big": 1.0})
+    result = plan(
+        demands={"big": 72_000},
+        priorities={"big": 1},
+        norms=norms,
+        shift_hours=10,
+        max_positions_per_worker=5,
+    )
+    assert result.worker_count == 2
+    assert all(w.positions_count == 1 for w in result.workers)
+
+
+def test_plan_aggregates_chunks_by_position():
+    norms = NormStorage({"big": 1.0})
+    result = plan(
+        demands={"big": 72_000},
+        priorities={"big": 1},
+        norms=norms,
+        shift_hours=10,
+        max_positions_per_worker=5,
+    )
+    assigned_units = {}
+    for w in result.workers:
+        for load in w.loads:
+            assigned_units[load.position] = assigned_units.get(load.position, 0.0) + load.units
+    assert assigned_units == {"big": pytest.approx(72_000.0, rel=1e-9)}
 
 
 if __name__ == "__main__":

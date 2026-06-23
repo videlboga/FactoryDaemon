@@ -62,7 +62,14 @@ def _load_session(chat_id: int) -> UserSession:
                 return UserSession.from_dict(json.load(f))
         except Exception:
             logging.getLogger(__name__).exception("Failed to load session %s", chat_id)
-    return UserSession(session_id=f"tg-{chat_id}")
+
+    return UserSession(
+        session_id=f"tg-{chat_id}",
+        shift_hours=settings.shift_hours,
+        max_positions_per_worker=settings.max_positions_per_worker,
+        underload_threshold=settings.underload_threshold,
+    )
+
 
 
 def _save_session(session: UserSession, chat_id: int) -> None:
@@ -75,17 +82,31 @@ def _save_session(session: UserSession, chat_id: int) -> None:
 
 
 async def _reply_or_explain(result: PlanningResult, message: types.Message) -> None:
-    """Send text reply; use LLM to rephrase if there are validation errors."""
+    """Send text reply, chunking if it exceeds Telegram limits."""
     logger = logging.getLogger(__name__)
+    text = result.reply
     if result.errors:
         try:
-            msgs = [{"role": "user", "content": result.reply}]
-            explanation = await explain_plan_issue(msgs)
-            await message.answer(explanation, parse_mode=ParseMode.MARKDOWN)
-            return
+            msgs = [{"role": "user", "content": text}]
+            text = await explain_plan_issue(msgs)
         except LLMError:
             logger.warning("LLM explanation failed", exc_info=True)
-    await message.answer(result.reply, parse_mode=ParseMode.MARKDOWN)
+    # Telegram text limit: 4096 UTF-16 code units; split on paragraphs safely.
+    MAX_TEXT_LEN = 4000
+    if len(text) <= MAX_TEXT_LEN:
+        await message.answer(text, parse_mode=ParseMode.MARKDOWN)
+        return
+    chunks = text.split("\n\n")
+    current = ""
+    for chunk in chunks:
+        if len(current) + len(chunk) + 2 > MAX_TEXT_LEN:
+            if current:
+                await message.answer(current.strip(), parse_mode=ParseMode.MARKDOWN)
+            current = chunk
+        else:
+            current = f"{current}\n\n{chunk}".strip() if current else chunk
+    if current:
+        await message.answer(current.strip(), parse_mode=ParseMode.MARKDOWN)
 
 
 async def _handle_file_upload(
@@ -209,6 +230,26 @@ async def cmd_reset(message: types.Message, state: FSMContext) -> None:
     )
 
 
+async def _send_plan_result(
+    message: types.Message,
+    result: PlanningResult,
+    state: FSMContext,
+) -> None:
+    """Always finish and send the Excel report if a plan was produced."""
+    chat_id = message.chat.id
+    _save_session(result.session, chat_id)
+
+    output = Path(tempfile.gettempdir()) / f"plan_{chat_id}.xlsx"
+    result2 = finish_plan(result.session, output)
+    _save_session(result2.session, chat_id)
+    if result2.excel_path:
+        document = types.FSInputFile(result2.excel_path)
+        await message.answer_document(document, caption=result2.reply)
+    else:
+        await _reply_or_explain(result2, message)
+    await state.set_state(PlanStates.collecting)
+
+
 @dp.message(Command("plan"))
 async def cmd_plan(message: types.Message, state: FSMContext) -> None:
     chat_id = message.chat.id
@@ -216,19 +257,7 @@ async def cmd_plan(message: types.Message, state: FSMContext) -> None:
     from factorydaemon.planner.orchestrator import run_planner
 
     result = run_planner(session)
-    _save_session(result.session, chat_id)
-
-    if result.session.step.name == "PLAN_READY":
-        output = Path(tempfile.gettempdir()) / f"plan_{chat_id}.xlsx"
-        result2 = finish_plan(result.session, output)
-        _save_session(result2.session, chat_id)
-        if result2.excel_path:
-            document = types.FSInputFile(result2.excel_path)
-            await message.answer_document(document, caption=result2.reply)
-        else:
-            await _reply_or_explain(result2, message)
-    else:
-        await _reply_or_explain(result, message)
+    await _send_plan_result(message, result, state)
 
 
 @dp.message(F.document)
@@ -266,17 +295,34 @@ async def handle_text(message: types.Message, state: FSMContext) -> None:
     text = message.text or ""
     if text.startswith("/"):
         return
+
+    session = _load_session(message.chat.id)
+
+    # If we are waiting for the worker count, parse a number from the message.
+    if session.step == Step.ASKING_WORKERS:
+        import re
+        match = re.search(r"\b(\d+)\b", text)
+        if match:
+            session.target_workers = int(match.group(1))
+            from factorydaemon.planner.orchestrator import run_planner
+
+            result = run_planner(session)
+            await _send_plan_result(message, result, state)
+            return
+        await message.answer("Введите число работников, например: 5")
+        return
+
     if "\n" in text or "\t" in text or "|" in text:
         await _handle_file_upload(message, state, text.encode("utf-8"), text_source=True)
         return
 
-    session = _load_session(message.chat.id)
     try:
         prompt = f"Пользователь написал: {text}. Текущее состояние сессии: {session.to_dict()}"
         reply = await explain_plan_issue([{"role": "user", "content": prompt}])
     except LLMError as exc:
         reply = f"Не получилось обработать сообщение: {exc}. Пришлите таблицу или файл."
     await message.answer(reply)
+
 
 
 def main() -> None:
