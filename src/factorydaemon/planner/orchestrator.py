@@ -1,11 +1,4 @@
-"""High-level planning orchestrator for FactoryDaemon sessions.
-
-This module implements the conversation flow:
-- parse uploaded tables;
-- detect their type (остатки / нормы / приоритеты);
-- extract values into a UserSession;
-- determine the next action (ask for missing data, run planner, report underload, produce report).
-"""
+"""High-level planning orchestrator for FactoryDaemon sessions."""
 
 from __future__ import annotations
 
@@ -16,7 +9,6 @@ from typing import TYPE_CHECKING
 import pandas as pd
 
 from factorydaemon.planner.engine import plan as plan_shift
-from factorydaemon.planner.file_type import FileTypeResult, detect_file_type
 from factorydaemon.planner.parser import ParseError, parse_file
 from factorydaemon.planner.session import Step, UserSession
 from factorydaemon.planner.validator import ValidationError, check_plan, validate_plan_inputs
@@ -27,8 +19,6 @@ if TYPE_CHECKING:
 
 
 class PlanningResult:
-    """Outcome of one planning step."""
-
     def __init__(
         self,
         session: UserSession,
@@ -96,7 +86,6 @@ _PRIORITY_KEYS = {
 
 
 def _find_column(df: pd.DataFrame, keys: set[str]) -> str | None:
-    """Find a DataFrame column matching one of the key fingerprints."""
     for col in df.columns:
         normalized = str(col).strip().lower()
         normalized = normalized.replace("№", "nomer")
@@ -108,10 +97,7 @@ def _find_column(df: pd.DataFrame, keys: set[str]) -> str | None:
     return None
 
 
-
-
 def _expected_file_type(session: UserSession) -> str:
-    """Return the next file type the session is waiting for (sequential mode)."""
     if not session.demands:
         return "остатки"
     if not session.norms:
@@ -119,19 +105,7 @@ def _expected_file_type(session: UserSession) -> str:
     return "приоритеты"
 
 
-def _guess_fallback_type(session: UserSession) -> str | None:
-    """Return the most likely missing file type based on session state."""
-    if not session.demands:
-        return "остатки"
-    if not session.norms:
-        return "нормы"
-    if not session.priorities:
-        return "приоритеты"
-    return None
-
-
 def _extract_columns(df: pd.DataFrame, file_type: str) -> tuple[str, str | None] | None:
-    """Return (position_col, value_col) for known file types. In sequential mode we trust the file type and fall back to the first two columns. Priorities may be a single ordered position column."""
     if len(df.columns) < 1:
         return None
     pos_col = _find_column(df, _POSITION_KEYS)
@@ -143,26 +117,22 @@ def _extract_columns(df: pd.DataFrame, file_type: str) -> tuple[str, str | None]
         val_col = _find_column(df, _TIME_KEYS)
     elif file_type == "приоритеты":
         val_col = _find_column(df, _PRIORITY_KEYS)
-        # A single-column priority file is an ordered list; no value column.
         if not val_col and len(df.columns) == 1:
             return pos_col, None
     else:
         return None
     if not val_col:
-        # Sequential fallback: use the first non-position column.
         candidates = [c for c in df.columns if str(c) != pos_col]
         val_col = str(candidates[0]) if candidates else None
     return pos_col, val_col
 
 
 def _reply(reply: str, extra: str) -> str:
-    """Join two text blocks with a blank line if both are non-empty."""
     parts = [p for p in (reply.strip(), extra.strip()) if p]
     return "\n\n".join(parts)
 
 
 def ingest_file(session: UserSession, source: str | Path) -> PlanningResult:
-    """Parse a file, classify it, and merge its data into the session."""
     logger = logging.getLogger(__name__)
     try:
         df = parse_file(source)
@@ -175,77 +145,101 @@ def ingest_file(session: UserSession, source: str | Path) -> PlanningResult:
         expected_type,
         list(df.columns),
     )
-    classification = FileTypeResult(
-        file_type=expected_type,
-        confidence=1.0,
-        reason=f"Sequential upload step expects {expected_type}.",
-    )
 
-    if classification.file_type is None:
-        return PlanningResult(
-            session,
-            "Не понял тип файла ("
-            + classification.reason
-            + "). Пришлите таблицу с остатками, нормами или приоритетами.",
-        )
-
-    cols = _extract_columns(df, classification.file_type)
-    logger.info("Matched columns for %s: %s", classification.file_type, cols)
+    cols = _extract_columns(df, expected_type)
+    logger.info("Matched columns for %s: %s", expected_type, cols)
     if cols is None:
         return PlanningResult(
             session,
-            "Определил файл как " + classification.file_type + ", но не нашёл нужных колонок. "
-            "Причина: " + classification.reason + ".",
+            "Определил файл как " + expected_type + ", но не нашёл нужных колонок. "
+            "Пришлите таблицу с остатками, нормами или приоритетами.",
         )
 
     pos_col, val_col = cols
-    if classification.file_type == "остатки":
+    if expected_type == "остатки":
         session.update_demands(df, pos_col, val_col)
         reply = f"Принял остатки: {len(session.demands)} позиций."
-    elif classification.file_type == "нормы":
+    elif expected_type == "нормы":
         session.update_norms(df, pos_col, val_col)
         reply = f"Принял нормы: {len(session.norms)} позиций."
     else:
-        session.update_priorities(df, pos_col, val_col)
-        reply = f"Принял приоритеты: {len(session.priorities)} позиций."
+        # The third file is the production plan: it provides both priorities (row
+        # order) and planned quantities (demands).
+        session.update_priorities(df, pos_col, val_col, is_plan_file=True)
+        reply = f"Принял план: {len(session.priorities)} позиций, {len(session.demands)} с объёмами."
 
     return advance_session(session, initial_reply=reply)
 
 
-def advance_session(session: UserSession, initial_reply: str = "") -> PlanningResult:
-    """Decide what to do next based on the current session state."""
-    missing_norms = session.missing_norms_positions
-    if missing_norms and not session.asked_for_norms:
-        session.asked_for_norms = True
-        session.step = Step.MISSING_NORMS
-        positions = ", ".join(f"`{p}`" for p in missing_norms[:10])
-        more = " и др." if len(missing_norms) > 10 else ""
-        extra = f"Нужны нормы (сек/шт) для позиций: {positions}{more}. Пришлите файл с нормами."
-        return PlanningResult(session, _reply(initial_reply, extra))
-
-    missing_priorities = session.missing_priorities_positions
-    if missing_priorities and not session.asked_for_priorities:
-        session.asked_for_priorities = True
-        session.step = Step.MISSING_PRIORITIES
-        positions = ", ".join(f"`{p}`" for p in missing_priorities[:10])
-        more = " и др." if len(missing_priorities) > 10 else ""
-        extra = f"Нужны приоритеты для позиций: {positions}{more}. Пришлите файл с приоритетами."
-        return PlanningResult(session, _reply(initial_reply, extra))
-
-    if not session.is_ready_to_plan:
-        return PlanningResult(
-            session,
-            _reply(initial_reply, "Жду остатки, нормы и приоритеты, чтобы составить план."),
+def _collect_warnings(session: UserSession) -> list[str]:
+    warnings: list[str] = []
+    if session.missing_norms_positions:
+        sample = ", ".join(f"`{p}`" for p in session.missing_norms_positions[:10])
+        more = " и др." if len(session.missing_norms_positions) > 10 else ""
+        warnings.append(
+            f"Нет норм (сек/шт) для позиций: {sample}{more}."
         )
 
-    session.step = Step.READY_TO_PLAN
+    effective = session.effective_demands()
+    missing_priorities = [p for p in effective if p not in session.priorities]
+    if missing_priorities:
+        sample = ", ".join(f"`{p}`" for p in missing_priorities[:10])
+        more = " и др." if len(missing_priorities) > 10 else ""
+        warnings.append(
+            f"Нет приоритетов для позиций: {sample}{more}."
+        )
+
+    # Validate that planned quantities do not exceed available stock.
+    for position, qty in session.plan_quantities.items():
+        available = session.demands.get(position, 0.0)
+        if qty > available + 1e-9:
+            warnings.append(
+                f"Позиция `{position}`: план {qty:.0f} ед. превышает остаток {available:.0f} ед. "
+                f"В плане будет {min(qty, available):.0f} ед."
+            )
+    return warnings
+
+
+def advance_session(session: UserSession, initial_reply: str = "") -> PlanningResult:
+    # Build warnings from whatever data we have so far.
+    session.warnings = _collect_warnings(session)
+
+    if not session.demands:
+        return PlanningResult(
+            session,
+            _reply(initial_reply, "Жду остатки, чтобы составить план."),
+        )
+
+    if not session.norms:
+        return PlanningResult(
+            session,
+            _reply(initial_reply, "Жду нормы (сек/шт) для расчёта плана."),
+        )
+
+    if not session.priorities:
+        return PlanningResult(
+            session,
+            _reply(initial_reply, "Жду приоритеты, чтобы составить план."),
+        )
+
+    if session.target_workers is None:
+        session.step = Step.ASKING_WORKERS
+        notes = []
+        if session.warnings:
+            notes.extend(f"⚠️ {w}" for w in session.warnings)
+        notes.append("Данные собраны. На сколько работников планировать?")
+        return PlanningResult(
+            session,
+            _reply(initial_reply, "\n".join(notes)),
+        )
+
     return run_planner(session, initial_reply=initial_reply)
 
 
 def run_planner(session: UserSession, initial_reply: str = "") -> PlanningResult:
-    """Run the planner and handle underload logic."""
     norms = NormStorage(session.norms)
-    input_errors = validate_plan_inputs(session.demands, session.priorities, norms)
+    effective_demands = session.effective_demands()
+    input_errors = validate_plan_inputs(effective_demands, session.priorities, norms)
     if input_errors:
         session.step = Step.COLLECTING
         msgs = "\n".join(f"- {e.message}" for e in input_errors[:5])
@@ -253,49 +247,47 @@ def run_planner(session: UserSession, initial_reply: str = "") -> PlanningResult
         return PlanningResult(session, _reply(initial_reply, extra))
 
     plan_result = plan_shift(
-        demands=session.demands,
+        demands=effective_demands,
         priorities=session.priorities,
         norms=norms,
         shift_hours=session.shift_hours,
         max_positions_per_worker=session.max_positions_per_worker,
+        target_workers=session.target_workers,
     )
     session.plan_result = plan_result
-    session.warnings = []
+    session.warnings.extend(plan_result.warnings)
 
+    actual = plan_result.worker_count
     utilization = plan_result.utilization
-    if (
-        utilization < session.underload_threshold
-        and not session.asked_for_more_priorities_underload
-    ):
-        session.asked_for_more_priorities_underload = True
-        session.step = Step.UNDERLOAD
-        extra = (
-            f"Посчитал план: {plan_result.worker_count} работник(ов), "
-            f"средняя загрузка {utilization * 100:.1f}%. Это ниже порога "
-            f"{session.underload_threshold * 100:.0f}%. "
-            "Пришлите ещё приоритеты/позиции, чтобы загрузить смену полнее."
-        )
-        return PlanningResult(session, _reply(initial_reply, extra))
 
-    errors = check_plan(
-        session.demands, session.priorities, norms, plan_result, session.shift_hours
-    )
-    if errors:
-        session.step = Step.COLLECTING
-        msgs = "\n".join(f"- {e.message}" for e in errors[:5])
-        extra = "План не прошёл проверку:\n" + msgs
-        return PlanningResult(session, _reply(initial_reply, extra))
+    notes: list[str] = []
+    if session.target_workers is not None and actual > session.target_workers:
+        notes.append(
+            f"⚠️ Указано {session.target_workers} работников, но план требует {actual}. "
+            f"Автоматически увеличено до {actual}."
+        )
+    elif session.target_workers is not None and actual < session.target_workers:
+        free = session.target_workers - actual
+        notes.append(
+            f"План размещён на {actual} работниках из {session.target_workers}. "
+            f"Свободная ёмкость для {free} работников — пришлите дополнительные приоритеты/остатки, "
+            f"и я дозагружу их."
+        )
+    else:
+        notes.append(
+            f"План составлен: {actual} работник(ов), "
+            f"средняя загрузка {utilization * 100:.1f}%."
+        )
+
+    if session.warnings:
+        notes.extend(f"⚠️ {w}" for w in session.warnings)
 
     session.step = Step.PLAN_READY
-    extra = (
-        f"План готов: {plan_result.worker_count} работник(ов), "
-        f"средняя загрузка {utilization * 100:.1f}%. Сейчас сгенерирую Excel-отчёт."
-    )
-    return PlanningResult(session, _reply(initial_reply, extra))
+    notes.append("Сейчас сгенерирую Excel-отчёт.")
+    return PlanningResult(session, _reply(initial_reply, "\n".join(notes)))
 
 
 def finish_plan(session: UserSession, output_path: Path) -> PlanningResult:
-    """Generate Excel report and finalize the session."""
     if session.plan_result is None:
         return PlanningResult(session, "Нет готового плана. Сначала составьте план.")
 

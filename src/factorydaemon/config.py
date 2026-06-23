@@ -55,7 +55,10 @@ class Settings(BaseSettings):
         ge=1,
         description="Интервал heartbeat агентов",
     )
-    scheduler_enabled: bool = Field(default=True, description="Включён ли планировщик")
+
+    shift_hours: float = Field(default=10.0, description="Длительность смены в часах")
+    max_positions_per_worker: int = Field(default=5, description="Лимит позиций на работника")
+    underload_threshold: float = Field(default=0.95, description="Порог недозагрузки")
 
 
 settings = Settings()

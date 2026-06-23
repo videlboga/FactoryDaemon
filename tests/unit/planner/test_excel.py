@@ -58,11 +58,39 @@ def test_plan_sheet_headers_and_rows(tmp_path: Path):
 
     wb = load_workbook(output)
     ws = wb["План"]
-    headers = [ws.cell(row=1, column=c).value for c in range(1, 7)]
-    assert headers == ["Работник", "Позиция", "Единиц", "Норма (с/ед)", "Время (с)", "Загрузка (%)"]
-    # 2 positions = 2 data rows
-    assert ws.cell(row=2, column=2).value in {"cut", "sew"}
-    assert ws.cell(row=3, column=2).value in {"cut", "sew"}
+    headers = [ws.cell(row=1, column=c).value for c in range(1, 9)]
+    assert headers == [
+        "Работник",
+        "Загрузка (ч)",
+        "Доля смены (%)",
+        "Позиция 1",
+        "Кол-во 1",
+        "Позиция 2",
+        "Кол-во 2",
+        "Позиция 3",
+    ]
+    # Worker 1 row.
+    assert ws.cell(row=2, column=1).value == 1
+    # Time and share columns are in hours / percent.
+    assert ws.cell(row=2, column=2).value <= 10.0
+    assert ws.cell(row=2, column=3).value <= 100.0
+    # Positions appear across columns.
+    row_positions = {ws.cell(row=2, column=c).value for c in range(4, 8, 2)}
+    assert row_positions == {"cut", "sew"}
+
+
+def test_plan_sheet_single_position_row(tmp_path: Path):
+    norms = _norms()
+    result = plan({"cut": 1}, {"cut": 1}, norms)
+    output = tmp_path / "plan.xlsx"
+    write_excel_report(result, output)
+
+    wb = load_workbook(output)
+    ws = wb["План"]
+    assert ws.cell(row=2, column=4).value == "cut"
+    assert ws.cell(row=2, column=5).value == 1.0
+    # Unused position columns are left blank.
+    assert ws.cell(row=2, column=6).value is None
 
 
 def test_summary_sheet_metrics(tmp_path: Path):
@@ -78,14 +106,16 @@ def test_summary_sheet_metrics(tmp_path: Path):
 
     wb = load_workbook(output)
     ws = wb["Сводка"]
-    headers = [ws.cell(row=1, column=c).value for c in range(1, 3)]
-    assert headers == ["Метрика", "Значение"]
-
-    metrics = {ws.cell(row=r, column=1).value: ws.cell(row=r, column=2).value for r in range(2, 7)}
+    metrics = {ws.cell(row=r, column=1).value: ws.cell(row=r, column=2).value for r in range(2, 8)}
     assert metrics["Количество работников"] == 1
-    assert metrics["Длительность смены (ч)"] == 8.0
+    assert metrics["Длительность смены (ч)"] == 10.0
     assert metrics["Лимит позиций на работника"] == 10
+    assert metrics["Рекомендуемое количество работников"] == 1
 
+    # Per-worker summary header.
+    w_row = 9
+    headers = [ws.cell(row=w_row, column=c).value for c in range(1, 6)]
+    assert headers == ["Работник", "Позиций", "Загрузка (ч)", "Загрузка (%)", "Осталось (ч)"]
 
 def test_warnings_sheet_with_warnings(tmp_path: Path):
     norms = _norms()

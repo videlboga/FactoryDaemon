@@ -18,6 +18,14 @@ import re
 # meaningful parts of a position name.
 _SEPARATORS = re.compile(r"[\s\-_]+")
 
+# Normalize dotted version notation such as "v.6", "v6", "V.6" → "V6" before
+# splitting into tokens.
+_VERSION_DOT = re.compile(r"(?<![0-9])(v|V)\.(\d+)")
+
+
+def _collapse_version_dots(value: str) -> str:
+    return _VERSION_DOT.sub(r"\1\2", value)
+
 
 def normalize_position(value: str | None) -> str:
     """Return the canonical spelling of a position name.
@@ -40,6 +48,8 @@ def normalize_position(value: str | None) -> str:
     value = value.strip()
     if not value:
         raise ValueError("position must be a non-empty string")
+
+    value = _collapse_version_dots(value)
 
     # Split on separators so "Л-43" / "Л 43" / "11В-11" become token lists.
     tokens = [t for t in _SEPARATORS.split(value) if t]
